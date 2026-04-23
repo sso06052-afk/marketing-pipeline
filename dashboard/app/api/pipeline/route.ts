@@ -4,8 +4,6 @@ import path from "path";
 
 export async function POST(req: NextRequest) {
   const { melon_only } = await req.json().catch(() => ({ melon_only: false }));
-
-  // dashboard/ 기준 한 단계 위가 프로젝트 루트, pipeline/ 폴더에서 실행
   const pipelineDir = path.resolve(process.cwd(), "../pipeline");
   const args = melon_only ? ["pipeline.py", "--melon-only"] : ["pipeline.py"];
 

@@ -17,14 +17,14 @@ EMAIL_EXCLUDE_DOMAINS = {"example.com", "gmail.com", "naver.com", "daum.net"}  #
 
 def find_instagram(artist: dict) -> tuple[str | None, str, int, str | None]:
     """
-    4단계 cascade로 인스타그램 핸들 탐색.
-    인스타 미발견 시 YouTube 채널 description에서 이메일 추출.
+    멜론 SNS → Google CSE 2단계로 인스타그램 핸들 탐색.
     반환: (handle, source, confidence_score, email)
     """
+    from datetime import date
     name = artist["name"]
     album = artist.get("album", "")
 
-    # 1단계: 멜론 아티스트 페이지
+    # 1단계: 멜론 아티스트 페이지 SNS 링크
     melon_instagram_url = artist.get("instagram_url")
     if melon_instagram_url:
         handle = _extract_handle(melon_instagram_url)
@@ -32,20 +32,7 @@ def find_instagram(artist: dict) -> tuple[str | None, str, int, str | None]:
             logger.info("[%s] 멜론에서 인스타 발견: @%s", name, handle)
             return handle, "melon", 85, None
 
-    # 2단계: Spotify API
-    handle = _search_spotify(name)
-    if handle:
-        logger.info("[%s] Spotify에서 인스타 발견: @%s", name, handle)
-        return handle, "spotify", 80, None
-
-    # 3단계: YouTube Data API (인스타 + 이메일 동시 탐색)
-    yt_handle, yt_email = _search_youtube(name)
-    if yt_handle:
-        logger.info("[%s] YouTube에서 인스타 발견: @%s", name, yt_handle)
-        return yt_handle, "youtube", 75, None
-
-    # 4단계: Google CSE (한도 내에서만)
-    from datetime import date
+    # 2단계: Google CSE (일일 100건 한도 내에서만)
     today = date.today().isoformat()
     if get_cse_usage(today) < 100:
         handle = _search_google_cse(name, album)
@@ -56,13 +43,8 @@ def find_instagram(artist: dict) -> tuple[str | None, str, int, str | None]:
     else:
         logger.warning("[%s] Google CSE 일일 한도 초과, 스킵", name)
 
-    # 인스타 미발견 → YouTube에서 추출한 이메일 반환
-    if yt_email:
-        logger.info("[%s] 인스타 미발견, 이메일 확보: %s", name, yt_email)
-    else:
-        logger.info("[%s] 인스타·이메일 모두 미발견", name)
-
-    return None, "none", 0, yt_email
+    logger.info("[%s] 인스타 미발견", name)
+    return None, "none", 0, None
 
 
 def _extract_handle(url: str) -> str | None:

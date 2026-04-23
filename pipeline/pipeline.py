@@ -20,7 +20,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pipeline")
 
-# 대형 기획사 차단 목록 — 인지도 높은 가수는 홍보 타겟 아님
 BLOCKED_AGENCIES = {
     "sm엔터테인먼트", "sm entertainment",
     "yg엔터테인먼트", "yg entertainment",
@@ -47,8 +46,8 @@ def _is_blocked(agency: str | None) -> bool:
 
 
 def main(melon_only: bool = False):
-    mode = "멜론 수집 전용" if melon_only else "전체"
-    logger.info("=== 파이프라인 시작 [%s 모드] ===", mode)
+    mode = "멜론만" if melon_only else "멜론 + Google CSE"
+    logger.info("=== 파이프라인 시작 [%s] ===", mode)
 
     songs = crawl_new_songs()
     if not songs:
@@ -59,42 +58,36 @@ def main(melon_only: bool = False):
     new_artists = [s for s in songs if s["melon_artist_id"] not in existing_ids]
     logger.info("신규 가수: %d명 (전체 수집: %d곡)", len(new_artists), len(songs))
 
-    stats = {"new": len(new_artists), "insta_found": 0, "needs_review": 0}
+    stats = {"new": 0, "insta_found": 0, "needs_review": 0}
 
     for artist in new_artists:
         artist_id = artist["melon_artist_id"]
         name = artist["name"]
 
         try:
-            # 멜론 아티스트 상세 (장르·소속사)
             detail = fetch_artist_detail(artist_id)
             artist.update(detail)
 
             # 대형 기획사 차단
             if _is_blocked(artist.get("agency")):
                 logger.info("[%s] 대형 기획사(%s) — 스킵", name, artist.get("agency"))
-                stats["new"] -= 1
                 continue
 
-            # 팬 수 1만 이상 스킵 (MELON_COOKIE 있을 때만 동작)
+            # 팬 수 1만 이상 스킵 (MELON_COOKIE 설정 시에만 동작)
             fan_count = fetch_fan_count(artist_id)
             if fan_count is not None and fan_count >= 10000:
                 logger.info("[%s] 팬 수 %d명 — 스킵", name, fan_count)
-                stats["new"] -= 1
                 continue
 
+            stats["new"] += 1
+
+            # 인스타 탐색 (멜론만 모드면 생략)
             if melon_only:
-                # 인스타 탐색 생략 — 검토필요로 저장
-                handle, source, score, email = None, None, 0, None
-                needs_review = True
+                handle, source, score, email = None, "none", 0, None
                 logger.info("[%s] 멜론 수집 완료 (인스타 탐색 생략)", name)
             else:
                 handle, source, score, email = find_instagram(artist)
-                needs_review = score < 70 or handle is None
-                logger.info(
-                    "[%s] 완료 — 인스타: %s, 출처: %s, 점수: %d, 검토필요: %s",
-                    name, handle or "없음", source, score, needs_review,
-                )
+            needs_review = handle is None
 
             upsert_artist({
                 "melon_artist_id": artist_id,
@@ -122,19 +115,22 @@ def main(melon_only: bool = False):
             if needs_review:
                 stats["needs_review"] += 1
 
+            logger.info("[%s] 완료 — 인스타: %s, 출처: %s, 점수: %s",
+                name, handle or "없음", source, score or "—")
+
         except Exception as e:
             logger.error("[%s] 처리 중 오류: %s", name, e, exc_info=True)
             continue
 
     insta_rate = round(stats["insta_found"] / stats["new"] * 100) if stats["new"] else 0
     logger.info(
-        "=== 파이프라인 완료 === 신규: %d명 | 인스타 확보: %d명(%d%%) | 검토 필요: %d명",
+        "=== 완료 === 저장: %d명 | 인스타 확보: %d명(%d%%) | 검토 필요: %d명",
         stats["new"], stats["insta_found"], insta_rate, stats["needs_review"],
     )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--melon-only", action="store_true", help="멜론 수집만 실행 (인스타 탐색 생략)")
+    parser.add_argument("--melon-only", action="store_true", help="인스타 탐색 생략 (테스트용)")
     args = parser.parse_args()
     main(melon_only=args.melon_only)

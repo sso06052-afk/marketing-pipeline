@@ -105,6 +105,7 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ melon_only: melonOnly }),
       });
+
       if (!res.body) throw new Error("스트림 없음");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
