@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase",
+        "--project-ref",
+        "sqvaywzgrygqxspsjlhd",
+        "--access-token",
+        "sbp_499d6a6f955588dc0164430cd203751704848f42"
+      ]
+    }
+  },
+  "agents": {
+    "backend-engineer": {
+      "description": "Python 파이프라인 담당 백엔드 엔지니어"
+    },
+    "frontend-engineer": {
+      "description": "Next.js 대시보드 담당 프론트엔드 엔지니어"
+    },
+    "db-engineer": {
+      "description": "Supabase/PostgreSQL 담당 DB 엔지니어"
+    },
+    "qa-engineer": {
+      "description": "테스트 및 품질 검증 담당 QA 엔지니어"
+    }
+  }
+}
