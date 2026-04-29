@@ -7,6 +7,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export type Artist = {
   melon_artist_id: string;
+  genie_artist_id: string | null;
+  source: string;
   name: string;
   genre: string | null;
   agency: string | null;
@@ -23,6 +25,12 @@ export type Artist = {
   contact_method: string | null;
   reply_received: boolean;
   reply_date: string | null;
+  not_found_reason: string | null;
+  reply_result: '긍정' | '거절' | '보류' | null;
+  memo: string | null;
+  followup_date: string | null;
+  deal_status: '진행중' | '완료' | null;
+  deal_count: number;
   created_at: string;
 };
 
