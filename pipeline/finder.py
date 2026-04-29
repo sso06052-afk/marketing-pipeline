@@ -446,7 +446,7 @@ def _ask_gemini(name: str, title: str, results: list[dict], candidates: list[str
         cands = body.get("candidates")
         if not cands:
             logger.warning("[%s] Gemini candidates 없음: %s", name, str(body)[:200])
-            return None
+            return None, False
         parts = cands[0].get("content", {}).get("parts", [])
         if not parts or "text" not in parts[0]:
             return None, False

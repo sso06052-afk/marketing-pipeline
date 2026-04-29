@@ -4,25 +4,33 @@
 
 -- artists 테이블
 CREATE TABLE IF NOT EXISTS artists (
-    melon_artist_id TEXT PRIMARY KEY,
-    name            TEXT NOT NULL,
-    genre           TEXT,
-    agency          TEXT,
+    melon_artist_id  TEXT PRIMARY KEY,
+    genie_artist_id  TEXT,
+    source           TEXT DEFAULT 'melon',
+    name             TEXT NOT NULL,
+    genre            TEXT,
+    agency           TEXT,
     instagram_handle TEXT,
-    instagram_url   TEXT,
+    instagram_url    TEXT,
     instagram_source TEXT CHECK (instagram_source IN ('melon', 'spotify', 'youtube', 'google', 'manual')),
     confidence_score INTEGER CHECK (confidence_score BETWEEN 0 AND 100),
-    needs_review    BOOLEAN DEFAULT false,
-    email           TEXT,
-    email_source    TEXT CHECK (email_source IN ('youtube_about', 'manual')),
-    contacted       BOOLEAN DEFAULT false,
-    contacted_date  TIMESTAMP WITH TIME ZONE,
-    contact_count   INTEGER DEFAULT 0,
-    contact_method  TEXT CHECK (contact_method IN ('instagram', 'email')),
-    reply_received  BOOLEAN DEFAULT false,
-    reply_date      TIMESTAMP WITH TIME ZONE,
-    last_crawled    DATE DEFAULT CURRENT_DATE,
-    created_at      TIMESTAMP WITH TIME ZONE DEFAULT now()
+    needs_review     BOOLEAN DEFAULT false,
+    not_found_reason TEXT,
+    email            TEXT,
+    email_source     TEXT CHECK (email_source IN ('youtube_about', 'manual')),
+    contacted        BOOLEAN DEFAULT false,
+    contacted_date   TIMESTAMP WITH TIME ZONE,
+    contact_count    INTEGER DEFAULT 0,
+    contact_method   TEXT CHECK (contact_method IN ('instagram', 'email')),
+    reply_received   BOOLEAN DEFAULT false,
+    reply_date       TIMESTAMP WITH TIME ZONE,
+    reply_result     TEXT CHECK (reply_result IN ('긍정', '거절', '보류')),
+    memo             TEXT,
+    followup_date    DATE,
+    deal_status      TEXT CHECK (deal_status IN ('진행중', '완료')),
+    deal_count       INTEGER DEFAULT 0,
+    last_crawled     DATE DEFAULT CURRENT_DATE,
+    created_at       TIMESTAMP WITH TIME ZONE DEFAULT now()
 );
 
 -- songs 테이블
@@ -120,5 +128,11 @@ $$ LANGUAGE sql SECURITY DEFINER;
 -- =============================================
 -- 기존 DB 마이그레이션용 (이미 테이블이 있는 경우 실행)
 -- =============================================
--- ALTER TABLE artists ADD COLUMN IF NOT EXISTS email TEXT;
--- ALTER TABLE artists ADD COLUMN IF NOT EXISTS contact_count INTEGER DEFAULT 0;
+-- ALTER TABLE artists ADD COLUMN IF NOT EXISTS genie_artist_id TEXT;
+-- ALTER TABLE artists ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'melon';
+-- ALTER TABLE artists ADD COLUMN IF NOT EXISTS not_found_reason TEXT;
+-- ALTER TABLE artists ADD COLUMN IF NOT EXISTS reply_result TEXT CHECK (reply_result IN ('긍정', '거절', '보류'));
+-- ALTER TABLE artists ADD COLUMN IF NOT EXISTS memo TEXT;
+-- ALTER TABLE artists ADD COLUMN IF NOT EXISTS followup_date DATE;
+-- ALTER TABLE artists ADD COLUMN IF NOT EXISTS deal_status TEXT CHECK (deal_status IN ('진행중', '완료'));
+-- ALTER TABLE artists ADD COLUMN IF NOT EXISTS deal_count INTEGER DEFAULT 0;

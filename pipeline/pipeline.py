@@ -79,6 +79,8 @@ def main(source: str = "melon", limit: int | None = None, max_pages: int = 1):
                 if fan_count is not None and fan_count >= 10000:
                     logger.info("[%s] 팬 수 %d명 — 스킵", name, fan_count)
                     continue
+                detail = melon_crawler.fetch_artist_detail(artist_id)
+                artist.update(detail)
 
             stats["new"] += 1
 
