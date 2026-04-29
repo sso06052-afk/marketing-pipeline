@@ -2,49 +2,389 @@ from __future__ import annotations
 import re
 import os
 import logging
-import time
-import random
+import requests
+from bs4 import BeautifulSoup
 
-from db import get_cse_usage, increment_cse_usage
+from db import get_serper_usage, increment_serper_usage
 
 logger = logging.getLogger(__name__)
 
 INSTAGRAM_PATTERN = re.compile(r'instagram\.com/([\w.]+)(?:[/?]|$)')
-EMAIL_PATTERN = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
-EXCLUDE_PATHS = {"p", "reel", "reels", "explore", "tv", "stories", "accounts", "about"}
-EMAIL_EXCLUDE_DOMAINS = {"example.com", "gmail.com", "naver.com", "daum.net"}  # 개인 메일 제외
+EXCLUDE_PATHS = {
+    "p", "reel", "reels", "explore", "tv", "stories",
+    "accounts", "about", "popular", "tags", "locations",
+    "direct", "share",
+}
+
+SERPER_URL = "https://google.serper.dev/search"
+
+# ACID 기반 소스별 기본 점수
+SOURCE_BASE_SCORES = {
+    "나무위키스크랩": 85,   # 커뮤니티 검증, SNS 직접 수록 → 높은 신뢰
+    "인스타직접검색": 75,   # site:instagram.com URL 자체가 프로필 → 높음
+    "소속사검색": 62,       # 소속사+이름 조합 → 중간
+    "나무위키검색": 58,     # 나무위키 URL만 (스크랩 전) → 중간
+    "일반검색": 50,         # 뉴스/팬사이트 언급 → 낮음
+}
 
 
-def find_instagram(artist: dict) -> tuple[str | None, str, int, str | None]:
-    """
-    멜론 SNS → Google CSE 2단계로 인스타그램 핸들 탐색.
-    반환: (handle, source, confidence_score, email)
-    """
+def find_instagram(artist: dict) -> tuple[str | None, str, int, str | None, str | None]:
+    """반환: (handle, source, confidence_score, email, not_found_reason)"""
     from datetime import date
     name = artist["name"]
-    album = artist.get("album", "")
 
-    # 1단계: 멜론 아티스트 페이지 SNS 링크
+    # 1단계: 멜론 아티스트 페이지 직접 링크 → 최고 신뢰도
     melon_instagram_url = artist.get("instagram_url")
     if melon_instagram_url:
         handle = _extract_handle(melon_instagram_url)
         if handle:
-            logger.info("[%s] 멜론에서 인스타 발견: @%s", name, handle)
-            return handle, "melon", 85, None
+            logger.info("[%s] 멜론 직링크 발견: @%s", name, handle)
+            return handle, "melon", 90, None, None
 
-    # 2단계: Google CSE (일일 100건 한도 내에서만)
+    # 2단계: Serper 다중 쿼리
     today = date.today().isoformat()
-    if get_cse_usage(today) < 100:
-        handle = _search_google_cse(name, album)
-        if handle:
-            increment_cse_usage(today)
-            logger.info("[%s] Google CSE에서 인스타 발견: @%s", name, handle)
-            return handle, "google", 65, None
-    else:
-        logger.warning("[%s] Google CSE 일일 한도 초과, 스킵", name)
+    if get_serper_usage(today) >= 2500:
+        logger.warning("[%s] Serper 일일 한도 초과, 스킵", name)
+        return None, "none", 0, None, "Serper 일일 한도 초과"
+
+    labeled_results = _search_serper_multi(
+        name,
+        song_title=artist.get("title", ""),
+        agency=artist.get("agency"),
+    )
+    if not labeled_results:
+        logger.info("[%s] 검색 결과 없음", name)
+        return None, "none", 0, None, "검색 결과 없음"
+
+    increment_serper_usage(today)
+
+    # 3단계: 나무위키 스크랩 보강
+    labeled_results = _enrich_with_namu(labeled_results, name)
+
+    # 4단계: 후보 핸들 추출 + ACID 기반 점수 계산
+    scored_candidates = _score_candidates(labeled_results, name)
+    if not scored_candidates:
+        logger.info("[%s] 핸들 후보 없음", name)
+        return None, "none", 0, None, "후보 없음"
+
+    top_handle, top_score = scored_candidates[0]
+    second_score = scored_candidates[1][1] if len(scored_candidates) > 1 else 0
+
+    # 5단계: 명확한 단독 승자 → Gemini 스킵
+    if top_score >= 75 and (top_score - second_score) >= 15:
+        logger.info("[%s] 확정 (Gemini 스킵): @%s (%d점)", name, top_handle, top_score)
+        return top_handle, "google", top_score, None, None
+
+    # 6단계: 애매한 경우 → Gemini가 핸들만 선택, 점수는 코드에서 유지
+    top_candidates = [h for h, _ in scored_candidates[:3]]
+    gemini_pick, gemini_explicit_none = _ask_gemini(name, artist.get("title", ""), labeled_results, top_candidates)
+
+    if gemini_pick:
+        final_score = next((s for h, s in scored_candidates if h == gemini_pick), top_score)
+        logger.info("[%s] Gemini 선택: @%s (%d점)", name, gemini_pick, final_score)
+        return gemini_pick, "google", final_score, None, None
+
+    if gemini_explicit_none:
+        # Gemini가 명시적으로 "없음" — top 후보가 85점 이상이면 그래도 사용 (강한 증거)
+        if top_score >= 85:
+            logger.info("[%s] Gemini 없음이나 강한 증거로 확정: @%s (%d점)", name, top_handle, top_score)
+            return top_handle, "google", top_score, None, None
+        logger.info("[%s] Gemini 없음 판정 → 검토 필요", name)
+        return None, "none", 0, None, "Gemini: 후보 중 적합한 계정 없음"
+
+    # Gemini API 오류 등 기술적 실패 → top 후보 사용
+    if top_score >= 50:
+        logger.info("[%s] Gemini 오류, 최고점 후보 사용: @%s (%d점)", name, top_handle, top_score)
+        return top_handle, "google", top_score, None, None
 
     logger.info("[%s] 인스타 미발견", name)
-    return None, "none", 0, None
+    return None, "none", 0, None, "후보 불충분"
+
+
+# ──────────────────────────────────────────────
+# 점수 계산
+# ──────────────────────────────────────────────
+
+def _score_candidates(results: list[dict], artist_name: str) -> list[tuple[str, int]]:
+    """검색 결과에서 핸들 추출 후 ACID 기반 점수 계산. 점수 내림차순 반환."""
+    handle_sources: dict[str, list[dict]] = {}
+
+    # 스니펫 내 @handle 형식도 잡기 위한 패턴
+    AT_HANDLE_PATTERN = re.compile(r'@([\w.]{2,})')
+
+    for result in results:
+        # URL에서 직접 추출 (인스타직접검색 결과일 때 핵심)
+        url_handle = _extract_handle(result.get("url", ""))
+        if url_handle:
+            handle_sources.setdefault(url_handle, []).append(result)
+
+        snippet = result.get("snippet", "")
+
+        # 스니펫에서 instagram.com/handle 형식 추출
+        for m in INSTAGRAM_PATTERN.finditer(snippet):
+            h = m.group(1).rstrip("/")
+            if h.lower() not in EXCLUDE_PATHS and len(h) >= 2:
+                handle_sources.setdefault(h, []).append(result)
+
+        # 스니펫에서 @handle 형식 추출 (Gemini 응답, 뉴스 기사 등)
+        for m in AT_HANDLE_PATTERN.finditer(snippet):
+            h = m.group(1).rstrip("/")
+            if h.lower() not in EXCLUDE_PATHS and len(h) >= 2:
+                handle_sources.setdefault(h, []).append(result)
+
+    scored: list[tuple[str, int]] = []
+    for handle, sources in handle_sources.items():
+        score = _calculate_score(handle, artist_name, sources)
+        scored.append((handle, score))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored
+
+
+def _calculate_score(handle: str, artist_name: str, sources: list[dict]) -> int:
+    """
+    ACID 기반 신뢰도 점수.
+    = 최고 소스 기본점 + 교차검증 보너스 + 이름유사도 + 공식 키워드
+    최대 95점 (100은 수동 입력 전용)
+    """
+    source_tags = [s.get("source_tag", "") for s in sources]
+
+    # 1. 기본점: 이 핸들을 발견한 소스 중 가장 신뢰도 높은 것
+    base_score = max(
+        (SOURCE_BASE_SCORES.get(tag, 45) for tag in source_tags),
+        default=45,
+    )
+
+    # 2. 교차검증 보너스: 서로 다른 소스 유형이 몇 개나 동의하는가
+    unique_types = len(set(source_tags))
+    if unique_types >= 3:
+        corroboration = 15
+    elif unique_types == 2:
+        corroboration = 10
+    else:
+        corroboration = 0
+
+    # 3. 이름 유사도 보너스: 핸들에 아티스트 이름의 영문 일부가 포함
+    name_bonus = _name_similarity_bonus(handle, artist_name)
+
+    # 4. 공식 키워드 보너스
+    all_snippets = " ".join(s.get("snippet", "") for s in sources).lower()
+    official_bonus = 5 if any(kw in all_snippets for kw in ["공식", "official", "ofcl"]) else 0
+
+    return min(base_score + corroboration + name_bonus + official_bonus, 95)
+
+
+def _name_similarity_bonus(handle: str, artist_name: str) -> int:
+    handle_lower = handle.lower()
+
+    # 이름 내 영문 파트 (예: ON THE ROCK, GroovyRoom)
+    alpha_parts = re.findall(r'[a-zA-Z]{2,}', artist_name)
+    for part in alpha_parts:
+        if part.lower() in handle_lower:
+            return 5
+
+    # 괄호 안 영문명 (예: 손예윤(Son Yeyoon))
+    paren_m = re.search(r'\(([a-zA-Z][^)]+)\)', artist_name)
+    if paren_m:
+        eng = paren_m.group(1).lower().replace(" ", "")
+        if len(eng) >= 3 and eng in handle_lower:
+            return 5
+
+    return 0
+
+
+# ──────────────────────────────────────────────
+# 검색
+# ──────────────────────────────────────────────
+
+def _search_serper_multi(name: str, song_title: str = "", agency: str | None = None) -> list[dict]:
+    api_key = os.getenv("SERPER_API_KEY")
+    if not api_key:
+        logger.warning("SERPER_API_KEY 없음")
+        return []
+
+    paren_match = re.search(r'\(([^)]+)\)', name)
+    alt_name = paren_match.group(1).strip() if paren_match else None
+    base_name = re.sub(r'\s*\([^)]*\)', '', name).strip()
+    search_name = alt_name if alt_name and alt_name.isascii() else base_name
+
+    query_plan: list[tuple[str, str, int]] = []
+    query_plan.append(("인스타직접검색", f"{search_name} site:instagram.com", 5))
+    if alt_name and search_name != base_name:
+        query_plan.append(("인스타직접검색", f"{base_name} site:instagram.com", 3))
+    query_plan.append(("일반검색", f"{search_name} 인스타그램", 5))
+    query_plan.append(("일반검색", f"{base_name} 인스타그램", 5))
+    if song_title:
+        query_plan.append(("일반검색", f"{song_title} {search_name} 인스타", 5))
+    else:
+        query_plan.append(("일반검색", f"{search_name} 인스타", 5))
+    query_plan.append(("나무위키검색", f"나무위키 {base_name}", 3))
+    if agency:
+        query_plan.append(("소속사검색", f"{base_name} {agency} instagram", 3))
+
+    seen_urls: set[str] = set()
+    results: list[dict] = []
+
+    for source_tag, query, num in query_plan:
+        try:
+            resp = requests.post(
+                SERPER_URL,
+                headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+                json={"q": query, "num": num},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            for item in data.get("organic", []):
+                url = item.get("link", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    results.append({
+                        "source_tag": source_tag,
+                        "query": query,
+                        "title": item.get("title", ""),
+                        "url": url,
+                        "snippet": item.get("snippet", ""),
+                    })
+        except Exception as e:
+            logger.warning("Serper 탐색 실패 [%s]: %s", source_tag, e)
+
+    return results
+
+
+def _enrich_with_namu(results: list[dict], name: str) -> list[dict]:
+    namu_urls = [r["url"] for r in results if "namu.wiki/w/" in r.get("url", "")]
+    if not namu_urls:
+        return results
+
+    base_name = re.sub(r'\s*\([^)]*\)', '', name).strip().lower()
+    paren_match = re.search(r'\(([^)]+)\)', name)
+    alt_name = paren_match.group(1).strip().lower() if paren_match else None
+
+    namu_url = namu_urls[0]
+    try:
+        resp = requests.get(
+            namu_url,
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        page_title = soup.title.get_text(strip=True).lower() if soup.title else ""
+        h1_text = soup.select_one("h1")
+        h1_text = h1_text.get_text(strip=True).lower() if h1_text else ""
+        combined = page_title + " " + h1_text
+
+        if not (base_name in combined or (alt_name and alt_name in combined)):
+            logger.info("[%s] 나무위키 페이지 무관 → 스킵 (%s)", name, page_title[:40])
+            return results
+
+        insta_handles = []
+        for a in soup.find_all("a", href=True):
+            h = _extract_handle(a["href"])
+            if h:
+                insta_handles.append(h)
+
+        handles = list(dict.fromkeys(insta_handles))
+        if handles:
+            snippet = "나무위키 SNS 정보: " + ", ".join(f"instagram.com/{h}" for h in handles)
+            results.append({
+                "source_tag": "나무위키스크랩",
+                "query": "",
+                "title": f"{name} - 나무위키",
+                "url": namu_url,
+                "snippet": snippet,
+            })
+            logger.info("[%s] 나무위키 스크랩: %s", name, snippet)
+
+    except Exception as e:
+        logger.warning("[%s] 나무위키 스크랩 실패: %s", name, e)
+
+    return results
+
+
+# ──────────────────────────────────────────────
+# Gemini (핸들 선택 전용 — 점수 판단 안 함)
+# ──────────────────────────────────────────────
+
+def _ask_gemini(name: str, title: str, results: list[dict], candidates: list[str]) -> tuple[str | None, bool]:
+    """반환: (handle, explicit_none) — explicit_none=True면 Gemini가 명시적으로 없다고 판단"""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None, False
+
+    lines = []
+    for i, r in enumerate(results, 1):
+        tag = r.get("source_tag", "")
+        lines.append(
+            f"{i}. [출처: {tag}]\n"
+            f"   URL: {r['url']}\n"
+            f"   제목: {r['title']}\n"
+            f"   내용: {r['snippet'][:200]}"
+        )
+    context = "\n\n".join(lines)
+    candidates_str = ", ".join(f"@{h}" for h in candidates)
+
+    prompt = (
+        f"한국 가수 이름: {name}\n"
+        f"최근 발표 곡: {title}\n\n"
+        f"후보 인스타그램 핸들: {candidates_str}\n\n"
+        f"아래 검색 결과를 보고, 위 후보 중 이 가수 본인의 인스타그램 핸들을 골라주세요.\n"
+        f"후보에 없으면 검색 결과에서 직접 찾아도 됩니다.\n\n"
+        f"[선택 기준 — 아래 증거가 있으면 해당 계정을 선택하세요]\n"
+        f"- 스니펫에 이 가수의 곡명·앨범명이 직접 언급됨 → 강한 증거\n"
+        f"- 나무위키 페이지에서 직접 추출한 SNS 링크 → 강한 증거\n"
+        f"- 계정 이름·소개에 가수 활동명이 포함됨 → 중간 증거\n"
+        f"- 여러 출처에서 동일 핸들이 반복 등장 → 중간 증거\n"
+        f"- 핸들이 가수 이름과 유사함 (단독으론 약한 증거, 다른 증거와 함께일 때 보조)\n\n"
+        f"[제외 기준]\n"
+        f"- 드라마·브랜드·소속사·팬계정\n"
+        f"- 동명이인 (다른 분야 활동, 다른 나라)\n\n"
+        f"{context}\n\n"
+        f"형식: 핸들: <핸들>\n"
+        f"위 증거가 전혀 없어서 판단 불가능한 경우에만 '없음'이라고 답하세요."
+    )
+
+    try:
+        import time as _time
+        for attempt in range(3):
+            resp = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+                timeout=45,
+            )
+            if resp.status_code not in (429, 503):
+                break
+            _time.sleep(5 * (attempt + 1))
+        resp.raise_for_status()
+        body = resp.json()
+        cands = body.get("candidates")
+        if not cands:
+            logger.warning("[%s] Gemini candidates 없음: %s", name, str(body)[:200])
+            return None
+        parts = cands[0].get("content", {}).get("parts", [])
+        if not parts or "text" not in parts[0]:
+            return None, False
+        answer = parts[0]["text"].strip()
+        # 마지막 줄만 로그 (앞부분은 긴 분석 텍스트)
+        answer_summary = answer.splitlines()[-1].strip() if answer else ""
+        logger.info("[%s] Gemini: %s", name, answer_summary)
+
+        if "없음" in answer:
+            return None, True
+
+        # ASCII 핸들만 추출 (한글 등 비ASCII 매칭 방지)
+        m = re.search(r'핸들\s*:\s*[`@]?([a-zA-Z0-9_.]{2,})', answer)
+        if m:
+            handle = m.group(1).strip()
+            if handle.lower() not in EXCLUDE_PATHS:
+                return handle, False
+
+    except Exception as e:
+        logger.warning("[%s] Gemini 실패: %s", name, e)
+
+    return None, False
 
 
 def _extract_handle(url: str) -> str | None:
@@ -55,133 +395,3 @@ def _extract_handle(url: str) -> str | None:
     if handle.lower() in EXCLUDE_PATHS:
         return None
     return handle
-
-
-def _search_spotify(name: str) -> str | None:
-    client_id = os.getenv("SPOTIFY_CLIENT_ID")
-    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
-    if not client_id or not client_secret:
-        return None
-
-    try:
-        import spotipy
-        from spotipy.oauth2 import SpotifyClientCredentials
-        sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
-            client_id=client_id,
-            client_secret=client_secret,
-        ))
-        results = sp.search(q=f"artist:{name}", type="artist", limit=5)
-        artists = results.get("artists", {}).get("items", [])
-
-        for artist in artists:
-            if artist["name"].lower() == name.lower():
-                external_urls = artist.get("external_urls", {})
-                instagram_url = external_urls.get("instagram")
-                if instagram_url:
-                    return _extract_handle(instagram_url)
-
-                # Spotify는 직접 instagram URL을 external_urls에 노출하지 않는 경우가 많음
-                # artist URI로 상세 조회
-                detail = sp.artist(artist["id"])
-                for _, url in detail.get("external_urls", {}).items():
-                    if "instagram.com" in url:
-                        return _extract_handle(url)
-    except Exception as e:
-        logger.warning("Spotify 탐색 실패: %s", e)
-
-    return None
-
-
-def _search_youtube(name: str) -> tuple[str | None, str | None]:
-    """
-    YouTube 채널 description에서 인스타 핸들과 이메일을 동시에 추출.
-    반환: (instagram_handle, email)
-    """
-    api_key = os.getenv("YOUTUBE_API_KEY")
-    if not api_key:
-        return None, None
-
-    try:
-        from googleapiclient.discovery import build
-        youtube = build("youtube", "v3", developerKey=api_key)
-
-        search_resp = youtube.search().list(
-            q=f"{name} official",
-            part="snippet",
-            type="channel",
-            maxResults=3,
-        ).execute()
-
-        channel_ids = [
-            item["snippet"]["channelId"]
-            for item in search_resp.get("items", [])
-        ]
-
-        if not channel_ids:
-            return None, None
-
-        channels_resp = youtube.channels().list(
-            id=",".join(channel_ids),
-            part="snippet",
-        ).execute()
-
-        for channel in channels_resp.get("items", []):
-            description = channel.get("snippet", {}).get("description", "")
-
-            instagram_handle = None
-            ig_match = INSTAGRAM_PATTERN.search(description)
-            if ig_match:
-                handle = ig_match.group(1).rstrip("/")
-                if handle.lower() not in EXCLUDE_PATHS:
-                    instagram_handle = handle
-
-            email = _extract_business_email(description)
-
-            if instagram_handle or email:
-                return instagram_handle, email
-
-    except Exception as e:
-        logger.warning("YouTube 탐색 실패: %s", e)
-
-    return None, None
-
-
-def _extract_business_email(text: str) -> str | None:
-    """description에서 비즈니스 이메일 추출 (개인 메일 도메인 제외)"""
-    matches = EMAIL_PATTERN.findall(text)
-    for email in matches:
-        domain = email.split("@")[1].lower()
-        if domain not in EMAIL_EXCLUDE_DOMAINS:
-            return email
-    return None
-
-
-def _search_google_cse(name: str, album: str) -> str | None:
-    api_key = os.getenv("GOOGLE_API_KEY")
-    cse_id = os.getenv("GOOGLE_CSE_ID")
-    if not api_key or not cse_id:
-        return None
-
-    try:
-        from googleapiclient.discovery import build
-        service = build("customsearch", "v1", developerKey=api_key)
-        query = f"{name} {album} site:instagram.com".strip()
-        result = service.cse().list(q=query, cx=cse_id, num=5).execute()
-
-        candidates = []
-        for item in result.get("items", []):
-            link = item.get("link", "")
-            match = INSTAGRAM_PATTERN.search(link)
-            if match:
-                handle = match.group(1).rstrip("/")
-                if handle.lower() not in EXCLUDE_PATHS:
-                    candidates.append(handle)
-
-        # 중복 제거 후 가장 많이 등장한 핸들 반환
-        if candidates:
-            return max(set(candidates), key=candidates.count)
-
-    except Exception as e:
-        logger.warning("Google CSE 탐색 실패: %s", e)
-
-    return None
