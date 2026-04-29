@@ -24,11 +24,19 @@ def get_client() -> Client:
 # 아티스트
 # ──────────────────────────────────────────────
 
-def get_existing_artist_ids() -> set[str]:
-    """DB에 이미 존재하는 melon_artist_id 집합 반환"""
+def update_last_crawled(melon_artist_id: str) -> None:
+    """기존 아티스트의 last_crawled만 오늘로 업데이트 (나머지 필드 건드리지 않음)"""
     client = get_client()
-    resp = client.table("artists").select("melon_artist_id").execute()
-    return {row["melon_artist_id"] for row in resp.data}
+    client.table("artists").update({"last_crawled": date.today().isoformat()}).eq("melon_artist_id", melon_artist_id).execute()
+    logger.debug("last_crawled 업데이트: %s", melon_artist_id)
+
+
+def get_existing_artist_ids(source: str = "melon") -> set[str]:
+    """DB에 이미 존재하는 아티스트 ID 집합 반환"""
+    client = get_client()
+    id_col = "genie_artist_id" if source == "genie" else "melon_artist_id"
+    resp = client.table("artists").select(id_col).eq("source", source).execute()
+    return {row[id_col] for row in resp.data if row.get(id_col)}
 
 
 def upsert_artist(artist: dict) -> None:
@@ -38,8 +46,15 @@ def upsert_artist(artist: dict) -> None:
     """
     client = get_client()
 
+    # 지니 전용 아티스트는 melon_artist_id가 없으므로 합성 키 사용
+    melon_id = artist.get("melon_artist_id") or (
+        f"genie_{artist['genie_artist_id']}" if artist.get("genie_artist_id") else None
+    )
+    if not melon_id:
+        raise ValueError(f"아티스트 ID 없음: {artist.get('name')}")
+
     payload = {
-        "melon_artist_id": artist["melon_artist_id"],
+        "melon_artist_id": melon_id,
         "name": artist["name"],
         "genre": artist.get("genre"),
         "agency": artist.get("agency"),
@@ -50,6 +65,9 @@ def upsert_artist(artist: dict) -> None:
         "needs_review": artist.get("needs_review", False),
         "email": artist.get("email"),
         "email_source": artist.get("email_source"),
+        "not_found_reason": artist.get("not_found_reason"),
+        "source": artist.get("source", "melon"),
+        "genie_artist_id": artist.get("genie_artist_id"),
         "last_crawled": date.today().isoformat(),
     }
 
@@ -79,10 +97,10 @@ def upsert_song(song: dict) -> None:
 # ──────────────────────────────────────────────
 
 def _cse_key(day: str) -> str:
-    return f"cse_usage_{day}"
+    return f"serper_usage_{day}"
 
 
-def get_cse_usage(day: str | None = None) -> int:
+def get_serper_usage(day: str | None = None) -> int:
     """오늘(또는 지정 날짜) Google CSE 사용 횟수 반환"""
     day = day or date.today().isoformat()
     client = get_client()
@@ -92,10 +110,10 @@ def get_cse_usage(day: str | None = None) -> int:
     return 0
 
 
-def increment_cse_usage(day: str | None = None) -> int:
+def increment_serper_usage(day: str | None = None) -> int:
     """CSE 사용량 +1 후 현재 값 반환"""
     day = day or date.today().isoformat()
-    current = get_cse_usage(day)
+    current = get_serper_usage(day)
     new_val = current + 1
     client = get_client()
     client.table("config").upsert(
