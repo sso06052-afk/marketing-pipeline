@@ -9,7 +9,8 @@
 
 ### 준비물
 1. **받은 파일**: `marketing_pipeline` 폴더 (압축 파일이면 먼저 압축 해제)
-2. **API 키 목록**: 담당자에게 받은 키값 문서 (Supabase, Gemini, Serper)
+2. **API 키 6개**: Supabase, Gemini, Serper 가입 후 발급받은 키들  
+   → 아직 발급 안 했으면 **[API 키 발급 가이드](api-keys-setup.md)** 먼저 보세요
 
 ### 시스템 요구사항
 - **OS**: Mac 10.15 이상 / Windows 10·11

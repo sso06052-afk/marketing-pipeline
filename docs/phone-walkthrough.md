@@ -1,7 +1,7 @@
 # 전화 통화 안내 스크립트 — 설치부터 테스트까지 E2E
 
 > 이 문서는 담당자(나)가 고객사에 전화하며 보는 가이드입니다.  
-> 처음부터 끝까지 약 **40~60분** 소요.
+> 처음부터 끝까지 약 **90~120분** 소요 (API 키 발급 30분 포함).
 
 ---
 
@@ -11,17 +11,19 @@
 - [ ] 받는 사람 이름·직책 확인
 - [ ] 아래 자료 준비:
   - [ ] 압축된 `marketing_pipeline.zip` 파일 (이메일/드라이브 링크 발송용)
-  - [ ] API 키 목록 문서 (메모장 또는 PDF)
   - [ ] 본 문서 (이 화면)
+  - [ ] API 키 발급 가이드 — `docs/api-keys-setup.md` (zip에 포함되어 있음)
 
-### API 키 목록 양식 (고객사에 전달용)
+### 키 메모 양식 (고객사에 받아쓰게 할 것)
+
+통화 중 고객사가 직접 발급받은 키를 메모장에 정리하게 안내:
 
 ```
 ─────────────────────────────────────────────
 음원 홍보 파이프라인 — API 키 (절대 외부 공유 금지)
 
 SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co
-SUPABASE_KEY=eyJhbGc...(긴 문자열)...
+SUPABASE_KEY=eyJhbGc...(anon public 키)
 NEXT_PUBLIC_SUPABASE_URL=(위 SUPABASE_URL과 동일)
 NEXT_PUBLIC_SUPABASE_ANON_KEY=(위 SUPABASE_KEY와 동일)
 SERPER_API_KEY=...
@@ -36,7 +38,7 @@ GEMINI_API_KEY=...
 ## 통화 시작 멘트
 
 > "안녕하세요, 음원 홍보 파이프라인 설치 도와드리려고 연락드렸습니다.  
-> 시간은 한 시간 정도 걸릴 거고요, 중간에 중단해도 되니까 부담 없이 진행하시면 됩니다.  
+> 시간은 두 시간 정도 걸릴 거고요, 중간에 중단해도 되니까 부담 없이 진행하시면 됩니다.  
 > 먼저 컴퓨터가 Mac이세요, Windows세요?"
 
 → 답변에 따라 아래 분기
@@ -53,15 +55,156 @@ GEMINI_API_KEY=...
 **Mac 추가 안내:**
 > "혹시 폴더 이름 옆에 -2 같은 숫자가 붙어있나요? 그러면 다른 곳에 같은 폴더가 또 있는 거예요. 일단 진행해도 됩니다."
 
-## 1-2. API 키 문서 전달
+## 1-2. 메모장 준비
 
-> "이메일 한 통 더 보내드렸습니다. 키값들이 적혀있는 문서인데요,  
-> **이 키값들은 비밀번호 같은 거라서 절대 외부에 공유하시면 안 됩니다.**  
-> 문서를 메모장이나 워드로 열어두세요. 곧 사용할 거예요."
+> "메모장 하나 띄워두세요. (Mac은 텍스트 편집기, Windows는 메모장)  
+> 이따 받으실 키값들을 여기에 정리할 거예요."
 
 ---
 
-# Phase 2 — Docker Desktop 설치 (10~15분)
+# Phase 2 — API 키 발급 (30~40분)
+
+> "이제 이 시스템이 사용할 외부 서비스 3개에 가입하실 거예요.  
+> 모두 무료로 시작 가능합니다."
+
+## 2-1. Supabase (DB) — 약 15분
+
+### 2-1-A. 회원가입
+
+> "브라우저에서 **supabase.com** 들어가주세요.  
+> 우측 상단 **Start your project** 버튼 클릭하시고요.  
+> **Continue with GitHub**으로 로그인하세요. GitHub 계정 없으면 잠깐 만들고 와주세요."
+
+> *(GitHub 가입이 필요하면 5~10분 추가)*
+
+### 2-1-B. 프로젝트 생성
+
+> "로그인 되시면 **New project** 버튼 누르세요. 화면에 정보 입력란이 뜰 거예요."
+
+> "**Project name**은 marketing-pipeline 이라고 입력하시고요.  
+> **Database Password**는 **강력한 비밀번호**를 만들어주세요. 메모장에 적어두세요. 나중에 거의 안 쓰지만 분실하면 곤란해요."
+
+> "**Region**은 **Northeast Asia (Seoul)** 선택하세요. 한국에 가까운 서버라 빠릅니다."
+
+> "**Pricing Plan**은 **Free** 선택. **Create new project** 누르세요."
+
+> "프로젝트 생성에 1~2분 걸립니다. 화면 가운데 로딩 스피너 돌면서 기다리시면 돼요."
+
+### 2-1-C. SQL 실행 (가장 중요한 단계)
+
+> "프로젝트 만들어졌으면 좌측 메뉴에 아이콘들이 쭉 있을 거예요.  
+> 그 중에 **`</>` 모양 아이콘** (SQL Editor) 클릭해주세요."
+
+> "**+ New query** 버튼 누르시고요. 빈 화면이 뜰 거예요."
+
+> "이제 받으신 폴더에서 SQL 파일을 열 거예요.  
+> **marketing_pipeline → supabase → schema.sql** 파일 찾아주세요."
+
+**Mac:**
+> "파일을 우클릭 → **다음으로 열기** → **TextEdit** 으로 열어주세요."
+
+**Windows:**
+> "파일을 우클릭 → **연결 프로그램** → **메모장** 으로 열어주세요."
+
+> "파일이 열리면 **Cmd+A (Mac) / Ctrl+A (Win)** 으로 전체 선택하시고  
+> **Cmd+C / Ctrl+C** 로 복사하세요."
+
+> "다시 Supabase SQL Editor 화면으로 돌아가서 빈 칸에 붙여넣기(Cmd+V / Ctrl+V) 하세요."
+
+> "코드가 쭉 붙으면 우측 하단 **Run** 버튼 누르세요. 또는 **Cmd+Enter / Ctrl+Enter**."
+
+> "잠깐 처리하고 화면 아래에 **'Success. No rows returned'** 라고 녹색 메시지가 뜨면 성공입니다."
+
+→ **에러 발생 시 대응:**
+- `relation "artists" already exists`: 이전 실행으로 이미 만들어진 거. 정상이니 다음 단계로
+- `permission denied`: 새 query 다시 만들어서 처음부터 재실행
+- 그 외 에러: 메시지 캡처해서 담당자(나)에게 보내달라고 요청
+
+> "이제 마이그레이션 파일도 한 번 더 실행할게요.  
+> SQL Editor에서 **+ New query** 다시 누르시고요."
+
+> "이번엔 **marketing_pipeline → supabase → migrations → 20260429_add_deal_columns.sql** 파일을 같은 방법으로 열어서 전체 복사·붙여넣기·Run 하세요."
+
+> "녹색 Success 뜨면 DB 셋업 완료입니다."
+
+### 2-1-D. 키 복사 (3개)
+
+> "이제 만든 DB의 접속 정보를 가져올 거예요."
+
+> "좌측 메뉴 맨 아래 **톱니바퀴 아이콘 (Settings)** 누르세요.  
+> 그 안에 메뉴들 중 **API** 클릭."
+
+> "화면에 정보가 쭉 나올 거예요. 메모장에 받아쓰세요."
+
+**1번: Project URL**
+> "**Project URL** 항목 복사해서 메모장에 적어주세요. **`https://xxxxxxxxxxxxx.supabase.co`** 형식이에요."
+
+**2번: anon public 키**
+> "조금 아래로 스크롤하면 **Project API keys** 섹션이 있어요.  
+> **anon public** 줄의 긴 문자열을 복사해주세요. **`eyJhbGc...`** 로 시작합니다."
+
+**3번 (선택): service_role 키**
+> "그 아래에 **service_role secret** 항목이 있어요.  
+> **'Reveal'** 또는 눈 아이콘 누르시면 키가 보입니다.  
+> 이건 비밀번호급으로 중요하니까 절대 외부 공유하지 마세요. 일단 메모만 해두세요."
+
+→ 메모장 상태 확인:
+```
+SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co
+SUPABASE_KEY=eyJhbGc... (anon public)
+SUPABASE_SERVICE_KEY=eyJhbGc... (service_role)
+```
+
+## 2-2. Gemini API — 약 5분
+
+> "이제 두 번째 서비스인 Gemini로 넘어갈게요. AI 판별용입니다."
+
+> "브라우저 새 탭에서 **aistudio.google.com** 들어가주세요.  
+> 우측 상단 **Sign in** → 본인 구글 계정으로 로그인."
+
+> "약관 동의 화면 뜨면 모두 체크하시고 진행."
+
+> "로그인 되면 좌측 메뉴에서 **Get API key** 버튼 찾아 클릭해주세요.  
+> 안 보이면 우측 상단 톱니바퀴 → **API keys** 메뉴로도 갈 수 있어요."
+
+> "**Create API key** 버튼 누르시고, **Create API key in new project** 선택."
+
+> "키가 화면에 표시되면 **`AIza...`** 로 시작하는 문자열이에요. **Copy** 버튼으로 복사해서 메모장에 추가하세요."
+
+→ 메모장 상태:
+```
+GEMINI_API_KEY=AIzaSy...
+```
+
+## 2-3. Serper API — 약 5분
+
+> "마지막입니다. 구글 검색용 서비스예요."
+
+> "브라우저 새 탭에서 **serper.dev** 들어가주세요.  
+> 우측 상단 **Sign Up** → 구글 계정 또는 이메일로 가입."
+
+> "가입 끝나면 자동으로 대시보드로 이동할 거예요.  
+> 좌측 메뉴에서 **API Key** 클릭."
+
+> "**Your API Key** 항목에 키가 보일 거예요. 복사해서 메모장에 추가하세요."
+
+> "참고로 가입 시 무료 검색 2,500회를 줍니다. 약 350명 가수 탐색 가능한 양이에요. 다 쓰면 다시 알려드릴게요."
+
+→ 메모장 최종 상태:
+```
+SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co
+SUPABASE_KEY=eyJhbGc...
+NEXT_PUBLIC_SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co (위 URL과 동일)
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGc... (위 KEY와 동일)
+SERPER_API_KEY=abcdef...
+GEMINI_API_KEY=AIzaSy...
+```
+
+> "이제 모든 키 발급 완료되셨어요. 이 메모 파일은 잃어버리지 마세요!"
+
+---
+
+# Phase 3 — Docker Desktop 설치 (10~15분)
 
 ## 2-1. Docker가 뭔지 간단 설명
 
@@ -122,7 +265,7 @@ GEMINI_API_KEY=...
 
 ---
 
-# Phase 3 — 환경변수 파일 만들기 (10분, 가장 중요한 단계)
+# Phase 4 — 환경변수 파일 만들기 (10분, 가장 중요한 단계)
 
 ## 3-1. 사전 안내
 
@@ -203,7 +346,7 @@ GEMINI_API_KEY=
 
 ---
 
-# Phase 4 — 터미널 열고 폴더 이동 (5분)
+# Phase 5 — 터미널 열고 폴더 이동 (5분)
 
 ## 4-1-A. Mac
 
@@ -236,7 +379,7 @@ cd $HOME\Desktop\marketing_pipeline
 
 ---
 
-# Phase 5 — Docker 이미지 빌드 (10분)
+# Phase 6 — Docker 이미지 빌드 (10분)
 
 ## 5-1. 빌드 명령어 실행
 
@@ -295,7 +438,7 @@ docker build `
 
 ---
 
-# Phase 6 — 컨테이너 실행 (3분)
+# Phase 7 — 컨테이너 실행 (3분)
 
 ## 6-1. 실행
 
@@ -339,7 +482,7 @@ docker logs pipeline-dashboard
 
 ---
 
-# Phase 7 — E2E 테스트 (15분)
+# Phase 8 — E2E 테스트 (15분)
 
 ## 7-1. 첫 수집 테스트 (작게)
 
@@ -406,7 +549,7 @@ docker logs pipeline-dashboard
 
 ---
 
-# Phase 8 — 일상 사용법 안내 (5분)
+# Phase 9 — 일상 사용법 안내 (5분)
 
 ## 8-1. 매일 하는 작업
 
@@ -444,7 +587,7 @@ docker start pipeline-dashboard
 
 ---
 
-# Phase 9 — 마무리 체크리스트
+# Phase 10 — 마무리 체크리스트
 
 > "오늘 설치한 거 마지막으로 확인할게요."
 
@@ -482,8 +625,8 @@ A. 1) Docker Desktop 실행 확인 → 2) `docker start pipeline-dashboard` → 
 A. 받은 폴더로 기존 폴더 덮어쓰기 → 터미널에서:
 ```bash
 docker rm -f pipeline-dashboard
-# Phase 5 빌드 다시
-# Phase 6 실행 다시
+# Phase 6 빌드 다시
+# Phase 7 실행 다시
 ```
 
 ---
