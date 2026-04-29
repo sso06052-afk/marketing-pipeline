@@ -3,9 +3,11 @@ import { spawn } from "child_process";
 import path from "path";
 
 export async function POST(req: NextRequest) {
-  const { melon_only } = await req.json().catch(() => ({ melon_only: false }));
+  const body = await req.json().catch(() => ({ source: "melon", pages: 1 }));
+  const source = body.source === "genie" ? "genie" : "melon";
+  const pages = Math.min(Math.max(Number(body.pages) || 1, 1), 5);
   const pipelineDir = path.resolve(process.cwd(), "../pipeline");
-  const args = melon_only ? ["pipeline.py", "--melon-only"] : ["pipeline.py"];
+  const args = ["pipeline.py", "--source", source, "--pages", String(pages)];
 
   const encoder = new TextEncoder();
 

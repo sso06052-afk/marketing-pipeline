@@ -13,15 +13,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "melon_artist_id 필요" }, { status: 400 });
   }
 
+  const update: Record<string, unknown> = {};
+  if (reply_result !== undefined) update.reply_result = reply_result;
+  if (memo !== undefined) update.memo = memo;
+  if (followup_date !== undefined) update.followup_date = followup_date || null;
+
   const { error } = await supabase
     .from("artists")
-    .update({
-      reply_received: true,
-      reply_date: new Date().toISOString(),
-      ...(reply_result && { reply_result }),
-      ...(memo !== undefined && { memo }),
-      ...(followup_date && { followup_date }),
-    })
+    .update(update)
     .eq("melon_artist_id", melon_artist_id);
 
   if (error) {

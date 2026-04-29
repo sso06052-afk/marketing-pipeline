@@ -7,20 +7,22 @@ const supabase = createClient(
 );
 
 export async function POST(req: NextRequest) {
-  const { melon_artist_id, reply_result, memo, followup_date } = await req.json();
+  const { melon_artist_id, instagram_handle } = await req.json();
 
   if (!melon_artist_id) {
     return NextResponse.json({ error: "melon_artist_id 필요" }, { status: 400 });
   }
 
+  const handle = instagram_handle?.trim().replace(/^@/, "") || null;
+
   const { error } = await supabase
     .from("artists")
     .update({
-      reply_received: true,
-      reply_date: new Date().toISOString(),
-      ...(reply_result && { reply_result }),
-      ...(memo !== undefined && { memo }),
-      ...(followup_date && { followup_date }),
+      instagram_handle: handle,
+      instagram_url: handle ? `https://www.instagram.com/${handle}/` : null,
+      instagram_source: handle ? "manual" : null,
+      confidence_score: handle ? 100 : null,
+      needs_review: !handle,
     })
     .eq("melon_artist_id", melon_artist_id);
 
