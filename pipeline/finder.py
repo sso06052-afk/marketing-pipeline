@@ -18,6 +18,91 @@ EXCLUDE_PATHS = {
 
 SERPER_URL = "https://google.serper.dev/search"
 
+INSTA_VERIFY_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "ko-KR,ko;q=0.9",
+    "x-ig-app-id": "936619743392459",
+    "Referer": "https://www.instagram.com/",
+}
+
+
+def _fetch_instagram_profile(handle: str) -> dict | None:
+    """
+    Instagram 내부 API로 프로필 조회.
+    반환: {biography, full_name, follower_count} 또는 None (계정 없음)
+    """
+    import time as _time
+    try:
+        _time.sleep(0.5)
+        resp = requests.get(
+            f"https://www.instagram.com/api/v1/users/web_profile_info/?username={handle}",
+            headers=INSTA_VERIFY_HEADERS,
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return None
+        user = resp.json().get("data", {}).get("user") or {}
+        if not user:
+            return None
+        return {
+            "biography": (user.get("biography") or "").lower(),
+            "full_name": (user.get("full_name") or "").lower(),
+            "follower_count": user.get("edge_followed_by", {}).get("count", 0),
+        }
+    except Exception:
+        return {}  # 네트워크 오류 → 빈 dict (존재는 하되 bio 없음으로 처리)
+
+
+def _bio_score_bonus(profile: dict, artist_name: str, agency: str | None) -> int:
+    """Bio/full_name에서 아티스트 이름·소속사 매칭 시 보너스 점수."""
+    bio = profile.get("biography", "")
+    full_name = profile.get("full_name", "")
+    combined = bio + " " + full_name
+
+    bonus = 0
+    base_name = re.sub(r'\s*\([^)]*\)', '', artist_name).strip().lower()
+    paren_m = re.search(r'\(([^)]+)\)', artist_name)
+    alt_name = paren_m.group(1).strip().lower() if paren_m else None
+
+    # 아티스트 이름 매칭 (한글 또는 영문)
+    if base_name and len(base_name) >= 2 and base_name in combined:
+        bonus += 10
+    elif alt_name and len(alt_name) >= 2 and alt_name in combined:
+        bonus += 10
+
+    # 소속사명 매칭
+    if agency and len(agency) >= 2 and agency.lower() in combined:
+        bonus += 8
+
+    # 공식 키워드
+    if any(kw in combined for kw in ["official", "공식", "ofcl"]):
+        bonus += 5
+
+    return bonus
+
+
+def _verified(
+    name: str, handle: str, source: str, score: int,
+    agency: str | None = None,
+) -> tuple[str | None, str, int, str | None, str | None]:
+    """핸들 반환 전 실존 확인 + bio 기반 점수 보정."""
+    profile = _fetch_instagram_profile(handle)
+
+    if profile is None:
+        logger.warning("[%s] @%s — Instagram 계정 없음 (404), 검토 필요", name, handle)
+        return None, "none", 0, None, f"계정 없음: @{handle}"
+
+    # bio 보너스 적용 (profile이 빈 dict이면 bonus=0)
+    if profile:
+        bonus = _bio_score_bonus(profile, name, agency)
+        if bonus:
+            new_score = min(score + bonus, 97)
+            logger.info("[%s] @%s bio 보너스 +%d → %d점", name, handle, bonus, new_score)
+            score = new_score
+
+    return handle, source, score, None, None
+
 # ACID 기반 소스별 기본 점수
 SOURCE_BASE_SCORES = {
     "나무위키스크랩": 85,   # 커뮤니티 검증, SNS 직접 수록 → 높은 신뢰
@@ -39,7 +124,7 @@ def find_instagram(artist: dict) -> tuple[str | None, str, int, str | None, str 
         handle = _extract_handle(melon_instagram_url)
         if handle:
             logger.info("[%s] 멜론 직링크 발견: @%s", name, handle)
-            return handle, "melon", 90, None, None
+            return _verified(name, handle, "melon", 90, artist.get("agency"))
 
     # 2단계: Serper 다중 쿼리
     today = date.today().isoformat()
@@ -73,7 +158,7 @@ def find_instagram(artist: dict) -> tuple[str | None, str, int, str | None, str 
     # 5단계: 명확한 단독 승자 → Gemini 스킵
     if top_score >= 75 and (top_score - second_score) >= 15:
         logger.info("[%s] 확정 (Gemini 스킵): @%s (%d점)", name, top_handle, top_score)
-        return top_handle, "google", top_score, None, None
+        return _verified(name, top_handle, "google", top_score, artist.get("agency"))
 
     # 6단계: 애매한 경우 → Gemini가 핸들만 선택, 점수는 코드에서 유지
     top_candidates = [h for h, _ in scored_candidates[:3]]
@@ -82,20 +167,19 @@ def find_instagram(artist: dict) -> tuple[str | None, str, int, str | None, str 
     if gemini_pick:
         final_score = next((s for h, s in scored_candidates if h == gemini_pick), top_score)
         logger.info("[%s] Gemini 선택: @%s (%d점)", name, gemini_pick, final_score)
-        return gemini_pick, "google", final_score, None, None
+        return _verified(name, gemini_pick, "google", final_score, artist.get("agency"))
 
     if gemini_explicit_none:
-        # Gemini가 명시적으로 "없음" — top 후보가 85점 이상이면 그래도 사용 (강한 증거)
         if top_score >= 85:
             logger.info("[%s] Gemini 없음이나 강한 증거로 확정: @%s (%d점)", name, top_handle, top_score)
-            return top_handle, "google", top_score, None, None
+            return _verified(name, top_handle, "google", top_score, artist.get("agency"))
         logger.info("[%s] Gemini 없음 판정 → 검토 필요", name)
         return None, "none", 0, None, "Gemini: 후보 중 적합한 계정 없음"
 
     # Gemini API 오류 등 기술적 실패 → top 후보 사용
     if top_score >= 50:
         logger.info("[%s] Gemini 오류, 최고점 후보 사용: @%s (%d점)", name, top_handle, top_score)
-        return top_handle, "google", top_score, None, None
+        return _verified(name, top_handle, "google", top_score, artist.get("agency"))
 
     logger.info("[%s] 인스타 미발견", name)
     return None, "none", 0, None, "후보 불충분"
