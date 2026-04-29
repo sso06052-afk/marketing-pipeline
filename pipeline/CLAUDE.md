@@ -6,11 +6,11 @@
 ## 파일별 담당
 | 파일 | 역할 | 핵심 함수 |
 |---|---|---|
-| `crawler.py` | 멜론 신곡 크롤링 | `crawl_new_songs() -> list[dict]` |
-| `finder.py` | 인스타 cascade 탐색 | `find_instagram(artist) -> (handle, source, score)` |
-| `verifier.py` | Gemini 2.0 Flash 판별 | `verify_account(name, album, candidates) -> (handle, score, needs_review)` |
+| `melon_crawler.py` | 멜론 신곡 크롤링 | `crawl_new_songs() -> list[dict]` |
+| `genie_crawler.py` | 지니 신곡 크롤링 + 아티스트 상세 | `crawl_new_songs()`, `fetch_artist_detail(artist_id)` |
+| `finder.py` | 인스타 다중 검색 + Gemini 판단 | `find_instagram(artist) -> (handle, source, score, email, not_found_reason)` |
 | `db.py` | Supabase 연동 | `upsert_artist`, `upsert_song`, `get_existing_artist_ids`, `get/increment_cse_usage` |
-| `pipeline.py` | 전체 오케스트레이터 | `main()` |
+| `pipeline.py` | 전체 오케스트레이터 | `main(source)` |
 
 ## 환경변수 (모두 루트 .env에서 로드)
 ```
@@ -34,9 +34,16 @@ GEMINI_API_KEY
 3. YouTube Data API v3 — 채널 description 정규식 `r'instagram\.com/([\w.]+)'`
 4. Google CSE — 쿼리 `"{name} {album} site:instagram.com"` (한도 내에서만)
 
-## Gemini 판별 로직 (verifier.py)
-- 후보 0개 → handle=None, needs_review=True
-- 후보 1개 → confidence=70, needs_review=False (Gemini 호출 생략)
-- 후보 2개+ → Gemini 호출
-  - 숫자 응답 → confidence=90, needs_review=False
-  - "불확실" → confidence=40, needs_review=True
+## 인스타 탐색 로직 (finder.py)
+검색 쿼리 4종 → 출처 태그 붙여 Gemini에게 전달 → Gemini 최종 판단
+
+| 출처 태그 | 쿼리 |
+|---|---|
+| 인스타직접검색 | `{이름} site:instagram.com` |
+| 일반검색 | `{이름} 인스타그램` 3가지 변형 |
+| 나무위키검색 | `나무위키 {이름}` → URL 있으면 페이지 스크랩 |
+| 소속사검색 | `{이름} {소속사} instagram` (소속사 있을 때) |
+
+- Gemini 응답 형식: `핸들: <handle> / 확신: 높음|낮음`
+- 확신 높음 → score=80 / 낮음 → score=55
+- 없음 → needs_review=True
