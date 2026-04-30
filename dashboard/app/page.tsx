@@ -10,7 +10,7 @@ import { useToast } from "@/components/Toaster";
 
 type Song = { title: string; album: string | null; release_date: string | null };
 type ReviewArtist = Artist & { songs: Song[] };
-type ArtistWithSong = Artist & { songs: Song[] };
+type ArtistWithSong = Artist & { songs?: Song[] };
 
 const PAGE_SIZE = 30;
 
