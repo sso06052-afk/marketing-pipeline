@@ -529,6 +529,13 @@ cd ~/Desktop/marketing-pipeline
 
 ### Windows (PowerShell)
 
+> **최초 1회만**: PowerShell에서 스크립트 실행 권한 허용 (안 그러면 차단됨)
+> ```powershell
+> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+> ```
+> 묻는 창 뜨면 **Y** 입력
+
+이후 업데이트는:
 ```powershell
 cd $HOME\Desktop\marketing-pipeline
 .\update.ps1

@@ -1,0 +1,10 @@
+# shell 스크립트는 LF로 고정 (Windows에서 git clone 해도 깨지지 않음)
+*.sh text eol=lf
+docker-start.sh text eol=lf
+update.sh text eol=lf
+
+# PowerShell은 CRLF
+*.ps1 text eol=crlf
+
+# 텍스트 파일은 자동 처리
+* text=auto

@@ -633,7 +633,15 @@ docker start pipeline-dashboard
 cd ~/Desktop/marketing-pipeline && ./update.sh
 ```
 
-**Windows:**
+**Windows (PowerShell — 최초 1회만 권한 허용):**
+> "Windows에선 한 번만 PowerShell 권한을 풀어주셔야 해요. 이거 한 번만 입력해주세요."
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+> "묻는 창 뜨면 **Y** 입력. 이후로는 안 물어봅니다."
+
 ```powershell
 cd $HOME\Desktop\marketing-pipeline ; .\update.ps1
 ```
