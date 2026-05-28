@@ -2,15 +2,14 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { supabase, Artist } from "@/lib/supabase";
-import ArtistRow from "@/components/ArtistRow";
+import ArtistRow, { ArtistWithSong, Song } from "@/components/ArtistRow";
 import ArtistPanel from "@/components/ArtistPanel";
 import Pagination from "@/components/Pagination";
 import TableSkeleton from "@/components/TableSkeleton";
+import PipelineProgress, { PipelineEvent } from "@/components/PipelineProgress";
 import { useToast } from "@/components/Toaster";
 
-type Song = { title: string; album: string | null; release_date: string | null };
-type ReviewArtist = Artist & { songs: Song[] };
-type ArtistWithSong = Artist & { songs?: Song[] };
+type ReviewArtist = Artist & { songs?: Song[] };
 
 const PAGE_SIZE = 30;
 
@@ -139,8 +138,8 @@ export default function HomePage() {
   const [source, setSource] = useState<"melon" | "genie">("genie");
   const [pages, setPages] = useState(1);
   const [logs, setLogs] = useState<string[]>([]);
+  const [pipelineEvents, setPipelineEvents] = useState<PipelineEvent[]>([]);
   const [showLogs, setShowLogs] = useState(false);
-  const logEndRef = useRef<HTMLDivElement>(null);
 
   // 검토필요 탭 상태
   const [reviewHandles, setReviewHandles] = useState<Record<string, string>>({});
@@ -182,11 +181,6 @@ export default function HomePage() {
   useEffect(() => {
     fetchArtists();
   }, [tab, page, selectedDate]);
-
-  // 로그 자동 스크롤
-  useEffect(() => {
-    if (showLogs) logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs, showLogs]);
 
   async function fetchPendingDates() {
     const { data } = await supabase
@@ -264,14 +258,27 @@ export default function HomePage() {
     if (running) return;
     setRunning(true);
     setLogs([]);
+    setPipelineEvents([]);
     setShowLogs(true);
 
+    const pipelineUrl = process.env.NEXT_PUBLIC_PIPELINE_API_URL;
+    const apiSecret = process.env.NEXT_PUBLIC_PIPELINE_SECRET ?? "";
+
     try {
-      const res = await fetch("/api/pipeline", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source, pages }),
-      });
+      const res = pipelineUrl
+        ? await fetch(`${pipelineUrl}/run`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(apiSecret ? { "x-api-key": apiSecret } : {}),
+            },
+            body: JSON.stringify({ source, pages }),
+          })
+        : await fetch("/api/pipeline", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ source, pages }),
+          });
 
       if (!res.body) throw new Error("스트림 없음");
       const reader = res.body.getReader();
@@ -288,13 +295,21 @@ export default function HomePage() {
           if (!line.startsWith("data: ")) continue;
           try {
             const payload = JSON.parse(line.slice(6));
-            if (payload.log) setLogs((prev) => [...prev, payload.log]);
+            if (payload.log) {
+              const log: string = payload.log;
+              // 구조화 이벤트 라인은 별도 state에, 그 외는 raw logs에
+              if (log.startsWith("EVENT:")) {
+                try {
+                  const ev = JSON.parse(log.slice(6)) as PipelineEvent;
+                  setPipelineEvents((prev) => [...prev, ev]);
+                } catch {}
+              } else {
+                setLogs((prev) => [...prev, log]);
+              }
+            }
             if (payload.done) {
               const ok = payload.code === 0;
-              const msg = ok
-                ? `수집 완료${payload.new_count ? ` — 신규 ${payload.new_count}명` : ""}`
-                : `오류 발생 (코드: ${payload.code})`;
-              setLogs((prev) => [...prev, ok ? `✅ ${msg}` : `❌ ${msg}`]);
+              const msg = ok ? "수집 완료" : `오류 발생 (코드: ${payload.code})`;
               showToast(msg, ok ? "success" : "error");
               if (ok) {
                 if ("Notification" in window && Notification.permission === "granted") {
@@ -379,7 +394,7 @@ export default function HomePage() {
                 onClick={() => setShowLogs(false)}
                 className="text-xs text-gray-400 hover:text-gray-600"
               >
-                로그 숨기기
+                진행 패널 숨기기
               </button>
             )}
             {/* 소스 선택 토글 */}
@@ -442,30 +457,15 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* 로그 패널 */}
+        {/* 파이프라인 진행 상황 */}
         {showLogs && (
-          <div className="mb-5 bg-gray-900 rounded-xl overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-2 bg-gray-800">
-              <span className="text-xs text-gray-400 font-mono">파이프라인 로그</span>
-              <button
-                onClick={() => setShowLogs(false)}
-                className="text-gray-500 hover:text-gray-300 text-xs"
-              >
-                닫기
-              </button>
-            </div>
-            <div className="h-52 overflow-y-auto p-4 font-mono text-xs text-green-400 space-y-0.5">
-              {logs.length === 0 ? (
-                <span className="text-gray-500">시작 중...</span>
-              ) : (
-                logs.map((line, i) => (
-                  <div key={i} className="leading-5 whitespace-pre-wrap break-all">
-                    {line}
-                  </div>
-                ))
-              )}
-              <div ref={logEndRef} />
-            </div>
+          <div className="mb-5">
+            <PipelineProgress
+              events={pipelineEvents}
+              rawLogs={logs}
+              running={running}
+              onClose={() => setShowLogs(false)}
+            />
           </div>
         )}
 

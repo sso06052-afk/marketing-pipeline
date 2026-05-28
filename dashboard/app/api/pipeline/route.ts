@@ -13,9 +13,22 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     start(controller) {
+      let closed = false;
       const send = (log: string, done = false, code?: number) => {
+        if (closed) return;
         const payload = done ? { done: true, code } : { log };
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
+      const finish = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {}
       };
 
       const child = spawn("python3", args, {
@@ -33,13 +46,13 @@ export async function POST(req: NextRequest) {
 
       child.on("close", (code) => {
         send("", true, code ?? 0);
-        controller.close();
+        finish();
       });
 
       child.on("error", (err) => {
         send(`[오류] ${err.message}`);
         send("", true, -1);
-        controller.close();
+        finish();
       });
     },
   });

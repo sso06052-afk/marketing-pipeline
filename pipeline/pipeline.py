@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -24,6 +25,7 @@ import melon_crawler
 import genie_crawler
 from finder import find_instagram
 from db import get_existing_artist_ids, upsert_artist, upsert_song, update_last_crawled
+import events
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,34 +56,52 @@ def _song_artist_id(artist: dict, source: str, artist_id: str | None) -> str:
 
 
 def main(source: str = "melon", limit: int | None = None, max_pages: int = 1):
+    started_at = time.time()
     logger.info("=== 파이프라인 시작 [%s] ===", source)
 
+    # ── 단계 1: 신곡 수집 ──
+    events.stage_start("collecting", source=source, max_pages=max_pages)
     songs = _crawl(source, max_pages=max_pages)
+    events.stage_complete("collecting", total_songs=len(songs))
+
     if not songs:
         logger.warning("수집된 신곡 없음. 종료.")
+        events.pipeline_error("수집된 신곡이 없습니다")
         return
 
+    # ── 단계 2: 신규 가수 분류 ──
+    events.stage_start("classifying")
     existing_ids = _get_existing_ids(source)
     id_key = "genie_artist_id" if source == "genie" else "melon_artist_id"
 
-    # 신규 아티스트만 인스타 탐색 대상으로 분리 (limit 적용)
     new_artist_songs = [s for s in songs if s.get(id_key) not in existing_ids]
     if limit:
         new_artist_songs = new_artist_songs[:limit]
 
+    existing_count = len(songs) - len(new_artist_songs)
+    events.stage_complete(
+        "classifying",
+        new_count=len(new_artist_songs),
+        existing_count=existing_count,
+    )
     logger.info(
         "수집: %d곡 | 신규 가수: %d명 | 기존 가수 신곡: %d곡",
         len(songs),
         len(new_artist_songs),
-        len(songs) - len(new_artist_songs),
+        existing_count,
     )
 
     stats = {"new": 0, "insta_found": 0, "needs_review": 0, "songs_added": 0}
 
-    # ── 신규 아티스트: 인스타 탐색 + 아티스트·곡 upsert ──
-    for artist in new_artist_songs:
+    # ── 단계 3: 인스타 탐색 + 저장 ──
+    total_new = len(new_artist_songs)
+    events.stage_start("searching", total=total_new)
+
+    for idx, artist in enumerate(new_artist_songs, start=1):
         artist_id = artist.get(id_key)
         name = artist["name"]
+
+        events.artist_processing(name, idx, total_new)
 
         try:
             if source == "genie" and artist_id:
@@ -92,6 +112,7 @@ def main(source: str = "melon", limit: int | None = None, max_pages: int = 1):
                 fan_count = melon_crawler.fetch_fan_count(artist_id)
                 if fan_count is not None and fan_count >= 10000:
                     logger.info("[%s] 팬 수 %d명 — 스킵", name, fan_count)
+                    events.artist_skip(name, f"팬 수 {fan_count:,}명 (대형 가수)", idx, total_new)
                     continue
                 detail = melon_crawler.fetch_artist_detail(artist_id)
                 artist.update(detail)
@@ -132,14 +153,30 @@ def main(source: str = "melon", limit: int | None = None, max_pages: int = 1):
                 stats["insta_found"] += 1
             if needs_review:
                 stats["needs_review"] += 1
+
+            events.artist_done(
+                name=name,
+                handle=handle,
+                score=score,
+                source=insta_source if handle else None,
+                index=idx,
+                total=total_new,
+                needs_review=needs_review,
+                reason=not_found_reason,
+            )
+
             logger.info("[%s] 완료 — 인스타: %s, 출처: %s, 점수: %s",
                 name, handle or "없음", insta_source, score or "—")
 
         except Exception as e:
             logger.error("[%s] 처리 중 오류: %s", name, e, exc_info=True)
+            events.artist_skip(name, f"오류: {str(e)[:60]}", idx, total_new)
             continue
 
-    # ── 기존 아티스트: last_crawled 업데이트 + 신규 곡만 upsert ──
+    events.stage_complete("searching")
+
+    # ── 단계 4: 기존 가수 신곡 저장 ──
+    events.stage_start("saving")
     for song in songs:
         artist_id = song.get(id_key)
         if artist_id not in existing_ids:
@@ -159,11 +196,17 @@ def main(source: str = "melon", limit: int | None = None, max_pages: int = 1):
             logger.info("[%s] 기존 가수 신곡 저장: %s", song["name"], song["title"])
         except Exception as e:
             logger.error("[%s] 곡 저장 오류: %s", song.get("name"), e)
+    events.stage_complete("saving", existing_songs=existing_count)
 
     insta_rate = round(stats["insta_found"] / stats["new"] * 100) if stats["new"] else 0
     logger.info(
         "=== 완료 === 신규 가수: %d명 | 인스타 확보: %d명(%d%%) | 검토 필요: %d명 | 곡 저장: %d곡",
         stats["new"], stats["insta_found"], insta_rate, stats["needs_review"], stats["songs_added"],
+    )
+
+    events.pipeline_done(
+        stats={**stats, "insta_rate": insta_rate, "existing_songs": existing_count},
+        duration_sec=time.time() - started_at,
     )
 
 
