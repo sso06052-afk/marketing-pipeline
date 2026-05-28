@@ -261,24 +261,12 @@ export default function HomePage() {
     setPipelineEvents([]);
     setShowLogs(true);
 
-    const pipelineUrl = process.env.NEXT_PUBLIC_PIPELINE_API_URL;
-    const apiSecret = process.env.NEXT_PUBLIC_PIPELINE_SECRET ?? "";
-
     try {
-      const res = pipelineUrl
-        ? await fetch(`${pipelineUrl}/run`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(apiSecret ? { "x-api-key": apiSecret } : {}),
-            },
-            body: JSON.stringify({ source, pages }),
-          })
-        : await fetch("/api/pipeline", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ source, pages }),
-          });
+      const res = await fetch("/api/pipeline", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, pages }),
+      });
 
       if (!res.body) throw new Error("스트림 없음");
       const reader = res.body.getReader();
