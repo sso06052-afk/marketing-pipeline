@@ -9,17 +9,6 @@ from dotenv import load_dotenv
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 if _ENV_PATH.is_file():
     load_dotenv(dotenv_path=str(_ENV_PATH))
-elif _ENV_PATH.exists():
-    raise RuntimeError(
-        f".env 가 파일이 아님 (디렉토리 또는 비정상 상태): {_ENV_PATH}\n"
-        f"호스트의 ~/Desktop/marketing-pipeline/.env 가 폴더로 만들어진 경우. "
-        f"`rmdir`로 폴더 지우고 파일로 다시 만들어야 합니다."
-    )
-else:
-    raise RuntimeError(
-        f".env 파일 없음: {_ENV_PATH}\n"
-        f"docker run 시 -v $(pwd)/.env:/app/.env 마운트를 확인하세요."
-    )
 
 import melon_crawler
 import genie_crawler
