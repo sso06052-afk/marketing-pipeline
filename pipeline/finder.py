@@ -30,7 +30,12 @@ INSTA_VERIFY_HEADERS = {
 def _fetch_instagram_profile(handle: str) -> dict | None:
     """
     Instagram 내부 API로 프로필 조회.
-    반환: {biography, full_name, follower_count} 또는 None (계정 없음)
+    반환:
+      - dict(biography 등) : 200 OK, 프로필 확인됨 (bio 보너스 가능)
+      - {}                 : 차단/레이트리밋(429·401·403 등) — 검증 불가, 핸들은 유지
+      - None               : 실제로 계정 없음(404 또는 200+빈 user) → 폐기
+    인스타는 비로그인 서버 요청을 자주 429로 막으므로, 200이 아니라고
+    무조건 폐기하면 멀쩡한 핸들까지 버려진다. '진짜 없음'만 폐기한다.
     """
     import time as _time
     try:
@@ -40,18 +45,22 @@ def _fetch_instagram_profile(handle: str) -> dict | None:
             headers=INSTA_VERIFY_HEADERS,
             timeout=8,
         )
+        if resp.status_code == 404:
+            return None  # 진짜 계정 없음
         if resp.status_code != 200:
-            return None
+            # 429/401/403 등 — 인스타가 서버 요청을 차단. 검증 불가 → 핸들 유지
+            logger.info("[insta] @%s 검증 불가 (status %s) — 핸들 유지", handle, resp.status_code)
+            return {}
         user = resp.json().get("data", {}).get("user") or {}
         if not user:
-            return None
+            return None  # API가 정상 응답했는데 user 없음 = 실제 없음
         return {
             "biography": (user.get("biography") or "").lower(),
             "full_name": (user.get("full_name") or "").lower(),
             "follower_count": user.get("edge_followed_by", {}).get("count", 0),
         }
     except Exception:
-        return {}  # 네트워크 오류 → 빈 dict (존재는 하되 bio 없음으로 처리)
+        return {}  # 네트워크 오류 → 검증 불가로 간주, 핸들 유지
 
 
 def _bio_score_bonus(profile: dict, artist_name: str, agency: str | None) -> int:
@@ -90,7 +99,7 @@ def _verified(
     profile = _fetch_instagram_profile(handle)
 
     if profile is None:
-        logger.warning("[%s] @%s — Instagram 계정 없음 (404), 검토 필요", name, handle)
+        logger.warning("[%s] @%s — Instagram 계정 실존 안 함(404), 검토 필요", name, handle)
         return None, "none", 0, None, f"계정 없음: @{handle}"
 
     # bio 보너스 적용 (profile이 빈 dict이면 bonus=0)
@@ -349,7 +358,22 @@ def _enrich_with_namu(results: list[dict], name: str) -> list[dict]:
     try:
         resp = requests.get(
             namu_url,
-            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                              "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
+                          "image/webp,*/*;q=0.8",
+                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
+            },
             timeout=10,
         )
         resp.raise_for_status()

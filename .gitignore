@@ -4,6 +4,13 @@
 .env.*.local
 dashboard/.env.local
 dashboard/.env.local.example
+secrets.local.txt
+
+# CLI 링크/캐시 (배포 토큰 포함될 수 있음)
+.vercel/
+.railway/
+dashboard/.vercel/
+pipeline/.railway/
 
 # Python
 __pycache__/
