@@ -479,7 +479,7 @@ def _ask_gemini(name: str, title: str, results: list[dict], candidates: list[str
         import time as _time
         for attempt in range(3):
             resp = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}",
                 json={"contents": [{"parts": [{"text": prompt}]}]},
                 timeout=45,
             )
