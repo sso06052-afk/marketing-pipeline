@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase, Artist } from "@/lib/supabase";
 import ArtistRow, { ArtistWithSong, Song } from "@/components/ArtistRow";
 import ArtistPanel from "@/components/ArtistPanel";
 import Pagination from "@/components/Pagination";
 import TableSkeleton from "@/components/TableSkeleton";
-import PipelineProgress, { PipelineEvent } from "@/components/PipelineProgress";
 import { useToast } from "@/components/Toaster";
+import { usePipeline } from "@/components/PipelineProvider";
 
 type ReviewArtist = Artist & { songs?: Song[] };
 
@@ -100,6 +100,7 @@ function DonutChart({
 
 export default function HomePage() {
   const { showToast } = useToast();
+  const { running, source, setSource, pages, setPages, runPipeline } = usePipeline();
 
   // 슬라이드오버 패널
   const [panelArtist, setPanelArtist] = useState<ArtistWithSong | null>(null);
@@ -133,14 +134,6 @@ export default function HomePage() {
     replied: 0,
   });
 
-  // 파이프라인 실행
-  const [running, setRunning] = useState(false);
-  const [source, setSource] = useState<"melon" | "genie">("genie");
-  const [pages, setPages] = useState(1);
-  const [logs, setLogs] = useState<string[]>([]);
-  const [pipelineEvents, setPipelineEvents] = useState<PipelineEvent[]>([]);
-  const [showLogs, setShowLogs] = useState(false);
-
   // 검토필요 탭 상태
   const [reviewHandles, setReviewHandles] = useState<Record<string, string>>({});
   const [reviewSaving, setReviewSaving] = useState<Record<string, boolean>>({});
@@ -152,6 +145,18 @@ export default function HomePage() {
     }
     fetchPendingDates();
   }, []);
+
+  // 파이프라인 완료 시 데이터 새로고침
+  useEffect(() => {
+    function handleDone() {
+      fetchDateStats();
+      fetchTabCounts();
+      fetchArtists();
+    }
+    window.addEventListener("pipeline:done", handleDone);
+    return () => window.removeEventListener("pipeline:done", handleDone);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate, tab, page]);
 
   // 달력 외부 클릭 시 닫기
   useEffect(() => {
@@ -254,87 +259,6 @@ export default function HomePage() {
     setLoading(false);
   }
 
-  async function runPipeline() {
-    if (running) return;
-    setRunning(true);
-    setLogs([]);
-    setPipelineEvents([]);
-    setShowLogs(true);
-
-    const railwayUrl = process.env.NEXT_PUBLIC_PIPELINE_API_URL;
-    const apiSecret = process.env.NEXT_PUBLIC_PIPELINE_SECRET ?? "";
-
-    try {
-      const res = railwayUrl
-        ? await fetch(`${railwayUrl}/run`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(apiSecret ? { "x-api-key": apiSecret } : {}),
-            },
-            body: JSON.stringify({ source, pages }),
-          })
-        : await fetch("/api/pipeline", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ source, pages }),
-          });
-
-      if (!res.body) throw new Error("스트림 없음");
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const payload = JSON.parse(line.slice(6));
-            if (payload.log) {
-              const log: string = payload.log;
-              // 구조화 이벤트 라인은 별도 state에, 그 외는 raw logs에
-              if (log.startsWith("EVENT:")) {
-                try {
-                  const ev = JSON.parse(log.slice(6)) as PipelineEvent;
-                  setPipelineEvents((prev) => [...prev, ev]);
-                } catch {}
-              } else {
-                setLogs((prev) => [...prev, log]);
-              }
-            }
-            if (payload.done) {
-              const ok = payload.code === 0;
-              const msg = ok ? "수집 완료" : `오류 발생 (코드: ${payload.code})`;
-              showToast(msg, ok ? "success" : "error");
-              if (ok) {
-                if ("Notification" in window && Notification.permission === "granted") {
-                  new Notification("파이프라인 완료", {
-                    body: msg,
-                    icon: "/favicon.ico",
-                  });
-                }
-                setTimeout(() => {
-                  fetchDateStats();
-                  fetchTabCounts();
-                  fetchArtists();
-                }, 1000);
-              }
-            }
-          } catch {}
-        }
-      }
-    } catch (e) {
-      setLogs((prev) => [...prev, `[오류] ${String(e)}`]);
-    } finally {
-      setRunning(false);
-    }
-  }
-
   async function handleReviewSave(artist: ReviewArtist) {
     const raw = reviewHandles[artist.melon_artist_id] ?? "";
     const handle = raw.trim().replace(/^@/, "");
@@ -389,14 +313,6 @@ export default function HomePage() {
             <h1 className="text-xl font-bold text-gray-900">음원 홍보 대시보드</h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {showLogs && (
-              <button
-                onClick={() => setShowLogs(false)}
-                className="text-xs text-gray-400 hover:text-gray-600"
-              >
-                진행 패널 숨기기
-              </button>
-            )}
             {/* 소스 선택 토글 */}
             <div
               className={`flex rounded-lg overflow-hidden border border-gray-200 text-xs font-medium ${
@@ -437,7 +353,7 @@ export default function HomePage() {
             )}
             {/* 파이프라인 실행 버튼 */}
             <button
-              onClick={runPipeline}
+              onClick={() => runPipeline()}
               disabled={running}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
                 running
@@ -456,18 +372,6 @@ export default function HomePage() {
             </button>
           </div>
         </div>
-
-        {/* 파이프라인 진행 상황 */}
-        {showLogs && (
-          <div className="mb-5">
-            <PipelineProgress
-              events={pipelineEvents}
-              rawLogs={logs}
-              running={running}
-              onClose={() => setShowLogs(false)}
-            />
-          </div>
-        )}
 
         {/* 날짜 선택기 */}
         <div className="flex items-center justify-center gap-4 mb-6 relative">

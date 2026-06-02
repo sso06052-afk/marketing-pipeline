@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import Nav from "@/components/Nav";
 import { ToastProvider } from "@/components/Toaster";
+import { PipelineProvider } from "@/components/PipelineProvider";
+import GlobalPipelinePanel from "@/components/GlobalPipelinePanel";
 import "./globals.css";
 
 const geist = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -16,8 +18,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="ko" className={`${geist.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col bg-gray-50">
         <ToastProvider>
-          <Nav />
-          {children}
+          <PipelineProvider>
+            <Nav />
+            <GlobalPipelinePanel />
+            {children}
+          </PipelineProvider>
         </ToastProvider>
       </body>
     </html>
