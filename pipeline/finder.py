@@ -16,6 +16,18 @@ EXCLUDE_PATHS = {
     "direct", "share",
 }
 
+# 브랜드·쇼핑몰·팬계정으로 의심되는 핸들 → 점수 감점 (가수 본인 계정 아님)
+NEGATIVE_HANDLE_KEYWORDS = (
+    "shop", "store", "mall", "market", "goods", "md_", "_md",
+    "fanbase", "fanpage", "fanclub", "fancafe", "_fan", "fan_",
+    "official_store", "officialstore",
+)
+
+
+def _negative_handle_penalty(handle: str) -> int:
+    h = handle.lower()
+    return 35 if any(kw in h for kw in NEGATIVE_HANDLE_KEYWORDS) else 0
+
 SERPER_URL = "https://google.serper.dev/search"
 
 INSTA_VERIFY_HEADERS = {
@@ -164,34 +176,30 @@ def find_instagram(artist: dict) -> tuple[str | None, str, int, str | None, str 
     top_handle, top_score = scored_candidates[0]
     second_score = scored_candidates[1][1] if len(scored_candidates) > 1 else 0
 
-    # 5단계: 명확한 단독 승자 → Gemini 스킵
-    if top_score >= 75 and (top_score - second_score) >= 15:
+    # 5단계: 매우 명확한 단독 승자만 Gemini 스킵 (공식계정·다중출처 일치)
+    if top_score >= 88 and (top_score - second_score) >= 15:
         logger.info("[%s] 확정 (Gemini 스킵): @%s (%d점)", name, top_handle, top_score)
         return _verified(name, top_handle, "google", top_score, artist.get("agency"))
 
-    # 6단계: 애매한 경우 → Gemini가 핸들만 선택, 점수는 코드에서 유지
+    # 6단계: Gemini가 곡/앨범/소속사 증거로 '본인 계정'인지 판정 (최종 게이트)
     top_candidates = [h for h, _ in scored_candidates[:3]]
-    gemini_pick, gemini_explicit_none = _ask_gemini(name, artist.get("title", ""), labeled_results, top_candidates)
+    gemini_pick, gemini_explicit_none = _ask_gemini(
+        name, artist.get("title", ""), labeled_results, top_candidates,
+        album=artist.get("album", "") or "", agency=artist.get("agency"),
+    )
 
     if gemini_pick:
         final_score = next((s for h, s in scored_candidates if h == gemini_pick), top_score)
         logger.info("[%s] Gemini 선택: @%s (%d점)", name, gemini_pick, final_score)
         return _verified(name, gemini_pick, "google", final_score, artist.get("agency"))
 
+    # Gemini가 '없음' 판정 OR 기술적 실패 → 틀린 추측 대신 검토필요 (오답 방지)
     if gemini_explicit_none:
-        if top_score >= 85:
-            logger.info("[%s] Gemini 없음이나 강한 증거로 확정: @%s (%d점)", name, top_handle, top_score)
-            return _verified(name, top_handle, "google", top_score, artist.get("agency"))
         logger.info("[%s] Gemini 없음 판정 → 검토 필요", name)
-        return None, "none", 0, None, "Gemini: 후보 중 적합한 계정 없음"
+        return None, "none", 0, None, "본인 계정 증거 불충분 — 수동 확인 필요"
 
-    # Gemini API 오류 등 기술적 실패 → top 후보 사용
-    if top_score >= 50:
-        logger.info("[%s] Gemini 오류, 최고점 후보 사용: @%s (%d점)", name, top_handle, top_score)
-        return _verified(name, top_handle, "google", top_score, artist.get("agency"))
-
-    logger.info("[%s] 인스타 미발견", name)
-    return None, "none", 0, None, "후보 불충분"
+    logger.info("[%s] Gemini 미응답 → 검토 필요", name)
+    return None, "none", 0, None, "자동 판별 불가 — 수동 확인 필요"
 
 
 # ──────────────────────────────────────────────
@@ -264,7 +272,11 @@ def _calculate_score(handle: str, artist_name: str, sources: list[dict]) -> int:
     all_snippets = " ".join(s.get("snippet", "") for s in sources).lower()
     official_bonus = 5 if any(kw in all_snippets for kw in ["공식", "official", "ofcl"]) else 0
 
-    return min(base_score + corroboration + name_bonus + official_bonus, 95)
+    # 5. 브랜드/쇼핑몰/팬계정 의심 핸들 감점
+    penalty = _negative_handle_penalty(handle)
+
+    score = base_score + corroboration + name_bonus + official_bonus - penalty
+    return max(0, min(score, 95))
 
 
 def _name_similarity_bonus(handle: str, artist_name: str) -> int:
@@ -302,16 +314,20 @@ def _search_serper_multi(name: str, song_title: str = "", agency: str | None = N
     search_name = alt_name if alt_name and alt_name.isascii() else base_name
 
     query_plan: list[tuple[str, str, int]] = []
+    # 1. 인스타 직접 검색
     query_plan.append(("인스타직접검색", f"{search_name} site:instagram.com", 5))
+    # 2. 인스타 직접 + 곡명 → 본인 계정 특정(동명이인 배제)
+    if song_title:
+        query_plan.append(("인스타직접검색", f"{search_name} {song_title} site:instagram.com", 3))
+    # 3. '가수 {이름} 인스타' → 가수 명시로 브랜드/동명이인 배제
+    query_plan.append(("일반검색", f"가수 {base_name} 인스타", 5))
+    # 4. 곡명 포함 일반검색 → 강한 본인 증거
+    if song_title:
+        query_plan.append(("일반검색", f"{base_name} {song_title} 인스타그램", 5))
+    # 5. 영문 활동명이 한글과 다르면 그것도 직접검색
     if alt_name and search_name != base_name:
         query_plan.append(("인스타직접검색", f"{base_name} site:instagram.com", 3))
-    query_plan.append(("일반검색", f"{search_name} 인스타그램", 5))
-    query_plan.append(("일반검색", f"{base_name} 인스타그램", 5))
-    if song_title:
-        query_plan.append(("일반검색", f"{song_title} {search_name} 인스타", 5))
-    else:
-        query_plan.append(("일반검색", f"{search_name} 인스타", 5))
-    query_plan.append(("나무위키검색", f"나무위키 {base_name}", 3))
+    query_plan.append(("나무위키검색", f"{base_name} 나무위키", 3))
     if agency:
         query_plan.append(("소속사검색", f"{base_name} {agency} instagram", 3))
 
@@ -416,8 +432,10 @@ def _enrich_with_namu(results: list[dict], name: str) -> list[dict]:
 # Gemini (핸들 선택 전용 — 점수 판단 안 함)
 # ──────────────────────────────────────────────
 
-def _ask_gemini(name: str, title: str, results: list[dict], candidates: list[str]) -> tuple[str | None, bool]:
-    """반환: (handle, explicit_none) — explicit_none=True면 Gemini가 명시적으로 없다고 판단"""
+def _ask_gemini(name: str, title: str, results: list[dict], candidates: list[str],
+                album: str = "", agency: str | None = None) -> tuple[str | None, bool]:
+    """수집한 곡 정보(곡명/앨범/소속사)와 일치하는 '그 곡을 부른 가수 본인'의
+    인스타 핸들을 Gemini가 판정. 반환: (handle, explicit_none)."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None, False
@@ -434,24 +452,27 @@ def _ask_gemini(name: str, title: str, results: list[dict], candidates: list[str
     context = "\n\n".join(lines)
     candidates_str = ", ".join(f"@{h}" for h in candidates)
 
+    album_part = f", 앨범 '{album}'" if album else ""
+    agency_part = f", 소속사 '{agency}'" if agency else ""
+
     prompt = (
-        f"한국 가수 이름: {name}\n"
-        f"최근 발표 곡: {title}\n\n"
-        f"후보 인스타그램 핸들: {candidates_str}\n\n"
-        f"아래 검색 결과를 보고, 위 후보 중 이 가수 본인의 인스타그램 핸들을 골라주세요.\n"
-        f"후보에 없으면 검색 결과에서 직접 찾아도 됩니다.\n\n"
-        f"[선택 기준 — 아래 증거가 있으면 해당 계정을 선택하세요]\n"
-        f"- 스니펫에 이 가수의 곡명·앨범명이 직접 언급됨 → 강한 증거\n"
-        f"- 나무위키 페이지에서 직접 추출한 SNS 링크 → 강한 증거\n"
-        f"- 계정 이름·소개에 가수 활동명이 포함됨 → 중간 증거\n"
-        f"- 여러 출처에서 동일 핸들이 반복 등장 → 중간 증거\n"
-        f"- 핸들이 가수 이름과 유사함 (단독으론 약한 증거, 다른 증거와 함께일 때 보조)\n\n"
-        f"[제외 기준]\n"
-        f"- 드라마·브랜드·소속사·팬계정\n"
-        f"- 동명이인 (다른 분야 활동, 다른 나라)\n\n"
-        f"{context}\n\n"
-        f"형식: 핸들: <핸들>\n"
-        f"위 증거가 전혀 없어서 판단 불가능한 경우에만 '없음'이라고 답하세요."
+        f"음원사이트에서 곡 '{title}'{album_part}을(를) 발표한 가수 '{name}'{agency_part} 의 정보를 수집했습니다.\n"
+        f"이 곡을 부른 **바로 그 가수 '{name}' 본인**의 인스타그램 계정을 찾는 것이 목표입니다.\n\n"
+        f"후보 핸들: {candidates_str}\n"
+        f"(후보에 없으면 아래 검색 결과에서 직접 찾아도 됩니다.)\n\n"
+        f"[판단 규칙 — 엄격하게]\n"
+        f"1. 반드시 위 곡 '{title}'을(를) 부른 그 가수 본인의 계정이어야 합니다. "
+        f"검색 결과에 이 곡명·앨범명·소속사·가수 활동명이 나타나 '그 가수가 맞다'는 근거가 있는 계정만 선택하세요.\n"
+        f"2. 절대 선택 금지: 동명이인(다른 가수·다른 분야·외국인), 브랜드·쇼핑몰·굿즈·소속사몰 계정, "
+        f"팬계정·팬페이지, 드라마/프로그램 계정.\n"
+        f"3. 한글 이름과 영문 핸들의 로마자 표기가 일치할 수 있습니다(예: 허진호 → heojinho). "
+        f"단, 이름 유사성만으로는 부족하고 곡/앨범/소속사 근거와 함께여야 합니다.\n"
+        f"4. '이 곡을 부른 가수가 맞다'는 근거가 부족하면 추측하지 말고 반드시 '없음'으로 답하세요. "
+        f"틀린 계정을 고르는 것보다 '없음'이 낫습니다.\n\n"
+        f"검색 결과:\n{context}\n\n"
+        f"답 형식(아래 둘 중 하나만):\n"
+        f"핸들: <핸들>\n"
+        f"없음"
     )
 
     try:
