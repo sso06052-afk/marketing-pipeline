@@ -28,6 +28,8 @@ logger = logging.getLogger("pipeline")
 
 
 def _crawl(source: str, max_pages: int = 1) -> list[dict]:
+    if source == "genie_genre":
+        return genie_crawler.crawl_by_genre(max_pages=max_pages)
     if source == "genie":
         return genie_crawler.crawl_new_songs(max_pages=max_pages)
     return melon_crawler.crawl_new_songs()
@@ -48,9 +50,13 @@ def main(source: str = "melon", limit: int | None = None, max_pages: int = 1):
     started_at = time.time()
     logger.info("=== 파이프라인 시작 [%s] ===", source)
 
+    # genie_genre(장르 탭)는 수집 소스만 다를 뿐, 저장·분류·상세조회는 genie와 동일하게 취급
+    crawl_source = source
+    source = "genie" if source == "genie_genre" else source
+
     # ── 단계 1: 신곡 수집 ──
-    events.stage_start("collecting", source=source, max_pages=max_pages)
-    songs = _crawl(source, max_pages=max_pages)
+    events.stage_start("collecting", source=crawl_source, max_pages=max_pages)
+    songs = _crawl(crawl_source, max_pages=max_pages)
     events.stage_complete("collecting", total_songs=len(songs))
 
     if not songs:
@@ -201,7 +207,7 @@ def main(source: str = "melon", limit: int | None = None, max_pages: int = 1):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", choices=["melon", "genie"], default="melon", help="크롤링 소스")
+    parser.add_argument("--source", choices=["melon", "genie", "genie_genre"], default="melon", help="크롤링 소스")
     parser.add_argument("--limit", type=int, default=None, help="처리할 최대 아티스트 수")
     parser.add_argument("--pages", type=int, default=1, help="크롤링할 최대 페이지 수 (지니 전용)")
     args = parser.parse_args()

@@ -130,7 +130,7 @@ def _stream_job(job_id: str) -> StreamingResponse:
 async def run_pipeline(body: RunRequest, request: Request):
     _check_auth(request)
 
-    source = body.source if body.source in ("melon", "genie") else "melon"
+    source = body.source if body.source in ("melon", "genie", "genie_genre") else "melon"
     pages = max(1, min(5, body.pages))
     limit = body.limit if body.limit and body.limit > 0 else None
 

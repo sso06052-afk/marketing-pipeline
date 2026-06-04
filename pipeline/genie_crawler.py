@@ -10,6 +10,18 @@ logger = logging.getLogger(__name__)
 
 GENIE_NEW_SONGS_URL = "https://www.genie.co.kr/newest/song"
 GENIE_ARTIST_URL = "https://www.genie.co.kr/detail/artistInfo?xxnm={artist_id}"
+GENIE_GENRE_URL = "https://www.genie.co.kr/genre/{code}"
+
+# 지니 장르 탭 (M0000=전체는 곡목록이 없어 개별 탭을 모두 순회)
+GENRE_CODES = {
+    "M0100": "가요",
+    "M0200": "POP",
+    "M0300": "OST",
+    "M0400": "JPOP",
+    "M0500": "JAZZ",
+    "M0600": "CLASSIC",
+    "M0800": "CCM",
+}
 
 HEADERS = {
     "User-Agent": (
@@ -106,15 +118,18 @@ def crawl_new_songs(max_pages: int = 1) -> list[dict]:
     return results
 
 
-def _parse_row(row) -> dict | None:
-    # 곡 ID (tr 속성)
-    genie_song_id = row.get("songid")
-
+def _parse_row(row, genre: str | None = None, fetch_release: bool = True) -> dict | None:
     # 곡명
     title_el = row.select_one("a.title.ellipsis")
     if not title_el:
         return None
     title = title_el.get_text(strip=True)
+
+    # 곡 ID: 신곡 페이지는 tr[songid], 장르 페이지는 onclick fnPlaySong('123;','1')
+    genie_song_id = row.get("songid")
+    if not genie_song_id:
+        m_song = re.search(r"fnPlaySong\('?(\d+)", title_el.get("onclick", ""))
+        genie_song_id = m_song.group(1) if m_song else None
 
     # 가수명 + 아티스트 ID (onclick="fnViewArtist(12345)")
     artist_el = row.select_one("a.artist.ellipsis")
@@ -131,8 +146,8 @@ def _parse_row(row) -> dict | None:
     album_id_m = re.search(r'fnViewAlbumLayer\((\d+)\)', album_onclick)
     album_id = album_id_m.group(1) if album_id_m else None
 
-    # 발매일 — 앨범 상세 페이지에서 가져옴
-    release_date = _fetch_release_date(album_id) if album_id else None
+    # 발매일 — 앨범 상세 페이지에서 가져옴 (장르 모드는 이미 최신순이라 생략 가능)
+    release_date = _fetch_release_date(album_id) if (fetch_release and album_id) else None
 
     return {
         "source": "genie",
@@ -143,26 +158,92 @@ def _parse_row(row) -> dict | None:
         "title": title,
         "album": album,
         "release_date": release_date,
-        "genre": None,
+        "genre": genre,
         "agency": None,
     }
 
 
 def _fetch_release_date(album_id: str) -> str | None:
-    """지니 앨범 상세 페이지에서 발매일 추출 (YYYY-MM-DD)"""
+    """지니 앨범 상세 페이지에서 발매일 추출 (YYYY-MM-DD).
+    '발매일' 라벨이 붙은 항목의 날짜를 우선 사용 (다른 YYYY.MM.DD 오인 방지)."""
     try:
         url = f"https://www.genie.co.kr/detail/albumInfo?axnm={album_id}"
         resp = _get_with_retry(url)
         soup = BeautifulSoup(resp.text, "html.parser")
-        # 페이지 상단 앨범 정보에서 YYYY.MM.DD 형식 첫 번째 날짜 추출
-        for el in soup.select(".info-zone span, .album-info span, li, dd"):
-            txt = el.get_text(strip=True)
-            m = re.match(r'^(\d{4}\.\d{2}\.\d{2})$', txt)
+        # 1순위: '발매일' 라벨이 포함된 li 안의 날짜
+        for li in soup.select("li"):
+            txt = li.get_text(" ", strip=True)
+            if "발매일" in txt:
+                m = re.search(r'(\d{4}\.\d{2}\.\d{2})', txt)
+                if m:
+                    return m.group(1).replace(".", "-")
+        # 2순위: 앨범 정보 영역의 단독 날짜
+        for el in soup.select(".info-zone span, .album-info span, dd"):
+            t = el.get_text(strip=True)
+            m = re.match(r'^(\d{4}\.\d{2}\.\d{2})$', t)
             if m:
                 return m.group(1).replace(".", "-")
     except Exception as e:
         logger.warning("발매일 조회 실패 (album_id=%s): %s", album_id, e)
     return None
+
+
+def crawl_by_genre(max_pages: int = 1, genre_codes: list[str] | None = None) -> list[dict]:
+    """지니 장르 탭(/genre/{코드})에서 곡·가수 수집. 장르 페이지는 발매최신순.
+    genre_codes 미지정 시 전체 장르 탭 순회('전체' = 7개 탭 합집합).
+    max_pages: 장르별 크롤링할 최대 페이지 수 (?pg=N)."""
+    codes = genre_codes or list(GENRE_CODES.keys())
+    logger.info("지니 장르 크롤링 시작 (장르 %d개, 장르당 최대 %d페이지)", len(codes), max_pages)
+
+    results: list[dict] = []
+    seen_artist_ids: set[str] = set()
+    seen_song_ids: set[str] = set()
+
+    for code in codes:
+        genre_name = GENRE_CODES.get(code, "")
+        for page in range(1, max_pages + 1):
+            try:
+                resp = _get_with_retry(GENIE_GENRE_URL.format(code=code), params={"pg": page})
+            except Exception as e:
+                logger.warning("장르 %s 페이지 %d 요청 실패: %s", code, page, e)
+                break
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            rows = soup.select("table tbody tr")
+            if not rows:
+                logger.info("장르 %s 페이지 %d: 행 없음 — 다음 장르", genre_name, page)
+                break
+
+            page_count = 0
+            for row in rows:
+                try:
+                    song_data = _parse_row(row, genre=genre_name, fetch_release=False)
+                    if not song_data:
+                        continue
+                    artist_id = song_data["genie_artist_id"]
+                    song_id = song_data["genie_song_id"]
+                    if artist_id and artist_id in seen_artist_ids:
+                        continue
+                    if song_id and song_id in seen_song_ids:
+                        continue
+                    if artist_id:
+                        seen_artist_ids.add(artist_id)
+                    if song_id:
+                        seen_song_ids.add(song_id)
+                    results.append(song_data)
+                    page_count += 1
+                except Exception as e:
+                    logger.warning("장르 행 파싱 실패: %s", e)
+                    continue
+                time.sleep(random.uniform(0.5, 1.2))
+
+            logger.info("장르 %s 페이지 %d 수집: %d곡", genre_name, page, page_count)
+            if page < max_pages:
+                time.sleep(random.uniform(2, 3))
+        time.sleep(random.uniform(1, 2))
+
+    logger.info("지니 장르 수집 완료: 총 %d곡 (장르 %d개)", len(results), len(codes))
+    return results
 
 
 def _extract_artist_id(onclick: str) -> str | None:

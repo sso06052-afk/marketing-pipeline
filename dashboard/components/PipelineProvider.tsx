@@ -18,9 +18,9 @@ interface PipelineContextValue {
   events: PipelineEvent[];
   logs: string[];
   showPanel: boolean;
-  source: "melon" | "genie";
+  source: "melon" | "genie" | "genie_genre";
   pages: number;
-  setSource: (s: "melon" | "genie") => void;
+  setSource: (s: "melon" | "genie" | "genie_genre") => void;
   setPages: (n: number) => void;
   setShowPanel: (v: boolean) => void;
   runPipeline: (opts?: { limit?: number }) => void;
@@ -54,7 +54,7 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
   const [events, setEvents] = useState<PipelineEvent[]>([]);
   const [logs, setLogs] = useState<string[]>([]);
   const [showPanel, setShowPanel] = useState(false);
-  const [source, setSource] = useState<"melon" | "genie">("genie");
+  const [source, setSource] = useState<"melon" | "genie" | "genie_genre">("genie");
   const [pages, setPages] = useState(1);
 
   // SSE reader 참조 (페이지 이동에도 연결 유지)

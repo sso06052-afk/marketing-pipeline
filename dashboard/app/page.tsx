@@ -319,7 +319,7 @@ export default function HomePage() {
                 running ? "opacity-50 pointer-events-none" : ""
               }`}
             >
-              {(["melon", "genie"] as const).map((s) => (
+              {(["melon", "genie", "genie_genre"] as const).map((s) => (
                 <button
                   key={s}
                   onClick={() => setSource(s)}
@@ -329,12 +329,12 @@ export default function HomePage() {
                       : "bg-white text-gray-500 hover:bg-gray-50"
                   }`}
                 >
-                  {s === "melon" ? "멜론" : "지니"}
+                  {s === "melon" ? "멜론" : s === "genie" ? "지니 신곡" : "지니 장르"}
                 </button>
               ))}
             </div>
-            {/* 페이지 수 선택 (지니 전용) */}
-            {source === "genie" && (
+            {/* 페이지 수 선택 (지니 신곡·장르) */}
+            {(source === "genie" || source === "genie_genre") && (
               <div className={`flex rounded-lg overflow-hidden border border-gray-200 text-xs font-medium ${running ? "opacity-50 pointer-events-none" : ""}`}>
                 {[1, 2, 3, 4, 5].map((n) => (
                   <button
@@ -367,7 +367,7 @@ export default function HomePage() {
                   실행 중...
                 </>
               ) : (
-                `▶ ${source === "melon" ? "멜론" : `지니 ${pages}p`} 실행`
+                `▶ ${source === "melon" ? "멜론" : source === "genie" ? `지니 신곡 ${pages}p` : `지니 장르 ${pages}p`} 실행`
               )}
             </button>
           </div>
