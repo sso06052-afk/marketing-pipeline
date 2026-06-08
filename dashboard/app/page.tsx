@@ -589,6 +589,7 @@ export default function HomePage() {
                   <p className="text-xs text-gray-400 mt-1">검토 필요한 가수가 없습니다</p>
                 </div>
               ) : (
+                <>
                 <div className="flex flex-col gap-3">
                   {(artists as ReviewArtist[]).map((a) => (
                     <div
@@ -645,6 +646,13 @@ export default function HomePage() {
                     </div>
                   ))}
                 </div>
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between mt-3">
+                    <span className="text-xs text-gray-400">총 {total}명</span>
+                    <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+                  </div>
+                )}
+                </>
               )
             ) : (
               /* 나머지 탭: 테이블 UI */
