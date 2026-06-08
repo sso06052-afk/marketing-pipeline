@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Artist } from "@/lib/supabase";
 import { useToast } from "@/components/Toaster";
+import { getSourceLink } from "@/lib/sourceLink";
 
-type Song = { title: string; album: string | null };
+type Song = { melon_song_id?: string | null; title: string; album: string | null };
 type Props = {
   artist: (Artist & { songs?: Song[] }) | null;
   onClose: () => void;
@@ -343,14 +344,19 @@ export default function ArtistPanel({ artist, onClose, onUpdate }: Props) {
               </div>
             </div>
             <div className="mt-2 flex gap-2">
-              <a
-                href={`https://www.melon.com/artist/detail.htm?artistId=${artist.melon_artist_id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-blue-500 hover:underline"
-              >
-                멜론 페이지 →
-              </a>
+              {(() => {
+                const link = getSourceLink(artist);
+                return (
+                  <a
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-500 hover:underline"
+                  >
+                    {link.label === "멜론 →" ? "멜론 페이지 →" : link.label}
+                  </a>
+                );
+              })()}
               {currentHandle && (
                 <a
                   href={`https://www.instagram.com/${currentHandle}/`}

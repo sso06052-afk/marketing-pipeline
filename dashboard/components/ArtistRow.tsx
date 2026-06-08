@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Artist } from "@/lib/supabase";
 import { useToast } from "@/components/Toaster";
 
-export type Song = { title: string; album: string | null; release_date: string | null };
+export type Song = { melon_song_id?: string | null; title: string; album: string | null; release_date: string | null };
 export type ArtistWithSong = Artist & { songs?: Song[] };
 type Props = {
   artist: ArtistWithSong;

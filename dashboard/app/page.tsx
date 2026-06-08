@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase, Artist } from "@/lib/supabase";
 import ArtistRow, { ArtistWithSong, Song } from "@/components/ArtistRow";
+import { getSourceLink } from "@/lib/sourceLink";
 import ArtistPanel from "@/components/ArtistPanel";
 import Pagination from "@/components/Pagination";
 import TableSkeleton from "@/components/TableSkeleton";
@@ -243,7 +244,7 @@ export default function HomePage() {
 
     let query = supabase
       .from("artists")
-      .select("*, songs(title, album, release_date)", { count: "exact" })
+      .select("*, songs(melon_song_id, title, album, release_date)", { count: "exact" })
       .eq("last_crawled", selectedDate)
       .order("created_at", { ascending: false })
       .range(from, to);
@@ -604,14 +605,19 @@ export default function HomePage() {
                             </div>
                           )}
                         </div>
-                        <a
-                          href={`https://www.melon.com/artist/detail.htm?artistId=${a.melon_artist_id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs text-blue-500 hover:underline shrink-0 ml-4"
-                        >
-                          멜론 →
-                        </a>
+                        {(() => {
+                          const link = getSourceLink(a);
+                          return (
+                            <a
+                              href={link.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-blue-500 hover:underline shrink-0 ml-4"
+                            >
+                              {link.label}
+                            </a>
+                          );
+                        })()}
                       </div>
                       <div className="flex gap-2">
                         <input
