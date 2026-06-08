@@ -29,7 +29,8 @@ logger = logging.getLogger("pipeline")
 
 def _crawl(source: str, max_pages: int = 1) -> list[dict]:
     if source == "genie_genre":
-        return genie_crawler.crawl_by_genre(max_pages=max_pages)
+        # 가요(M0100) '전체' 탭만 수집 — 30곡/페이지, 최대 5페이지
+        return genie_crawler.crawl_by_genre(max_pages=max_pages, genre_codes=["M0100"])
     if source == "genie":
         return genie_crawler.crawl_new_songs(max_pages=max_pages)
     return melon_crawler.crawl_new_songs()
