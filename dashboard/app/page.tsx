@@ -14,9 +14,10 @@ type ReviewArtist = Artist & { songs?: Song[] };
 
 const PAGE_SIZE = 30;
 
-type Tab = "pending" | "awaiting" | "contacted" | "replied" | "review";
+type Tab = "all" | "pending" | "awaiting" | "contacted" | "replied" | "review";
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: "all", label: "전체" },
   { id: "pending", label: "발송대기" },
   { id: "awaiting", label: "검색대기" },
   { id: "review", label: "검토필요" },
@@ -123,7 +124,7 @@ export default function HomePage() {
   // 아티스트 목록
   const [artists, setArtists] = useState<ArtistWithSong[]>([]);
   const [tab, setTab] = useState<Tab>("pending");
-  const [tabCounts, setTabCounts] = useState({ pending: 0, awaiting: 0, contacted: 0, replied: 0, review: 0 });
+  const [tabCounts, setTabCounts] = useState({ all: 0, pending: 0, awaiting: 0, contacted: 0, replied: 0, review: 0 });
   const [searchLimit, setSearchLimit] = useState(30);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -232,6 +233,7 @@ export default function HomePage() {
       .eq("last_crawled", selectedDate);
     if (!data) return;
     setTabCounts({
+      all: data.length,
       pending: data.filter((a) => !a.contacted && !a.needs_review && a.instagram_handle != null).length,
       awaiting: data.filter((a) => !a.contacted && !a.needs_review && !a.instagram_handle).length,
       contacted: data.filter((a) => a.contacted && !a.reply_received).length,
