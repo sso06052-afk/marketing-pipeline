@@ -39,6 +39,74 @@ def get_existing_artist_ids(source: str = "melon") -> set[str]:
     return {row[id_col] for row in resp.data if row.get(id_col)}
 
 
+def get_unsearched_artists(limit: int = 50) -> list[dict]:
+    """아직 인스타 검색을 안 한 '검색 대기' 가수 반환.
+    검색 대기 = instagram_handle 없음 AND needs_review=false AND contacted=false.
+    finder.find_instagram 에 넘길 수 있도록 곡 제목/앨범까지 포함."""
+    client = get_client()
+    resp = (
+        client.table("artists")
+        .select("melon_artist_id, genie_artist_id, source, name, agency, genre, songs(title, album)")
+        .is_("instagram_handle", "null")
+        .eq("needs_review", False)
+        .eq("contacted", False)
+        .limit(limit)
+        .execute()
+    )
+    out: list[dict] = []
+    for row in resp.data:
+        songs = row.get("songs") or []
+        first = songs[0] if songs else {}
+        out.append({
+            "melon_artist_id": row["melon_artist_id"],
+            "genie_artist_id": row.get("genie_artist_id"),
+            "source": row.get("source"),
+            "name": row["name"],
+            "agency": row.get("agency"),
+            "genre": row.get("genre"),
+            "title": first.get("title", ""),
+            "album": first.get("album", ""),
+            "instagram_url": None,
+        })
+    return out
+
+
+def count_unsearched_artists() -> int:
+    """검색 대기 가수 수."""
+    client = get_client()
+    resp = (
+        client.table("artists")
+        .select("melon_artist_id", count="exact")
+        .is_("instagram_handle", "null")
+        .eq("needs_review", False)
+        .eq("contacted", False)
+        .execute()
+    )
+    return resp.count or 0
+
+
+def update_instagram_result(
+    melon_artist_id: str,
+    handle: str | None,
+    insta_source: str | None,
+    score: int | None,
+    email: str | None,
+    not_found_reason: str | None,
+    needs_review: bool,
+) -> None:
+    """인스타 검색 결과만 갱신 (이름/장르/소속사 등은 건드리지 않음)."""
+    client = get_client()
+    client.table("artists").update({
+        "instagram_handle": handle,
+        "instagram_url": f"https://www.instagram.com/{handle}/" if handle else None,
+        "instagram_source": insta_source if handle else None,
+        "confidence_score": score if score else None,
+        "needs_review": needs_review,
+        "email": email,
+        "not_found_reason": not_found_reason,
+    }).eq("melon_artist_id", melon_artist_id).execute()
+
+
 def upsert_artist(artist: dict) -> None:
     """
     artists 테이블 upsert.

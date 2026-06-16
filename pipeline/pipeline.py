@@ -13,7 +13,10 @@ if _ENV_PATH.is_file():
 import melon_crawler
 import genie_crawler
 from finder import find_instagram
-from db import get_existing_artist_ids, upsert_artist, upsert_song, update_last_crawled
+from db import (
+    get_existing_artist_ids, upsert_artist, upsert_song, update_last_crawled,
+    get_unsearched_artists, update_instagram_result,
+)
 import events
 
 logging.basicConfig(
@@ -47,9 +50,14 @@ def _song_artist_id(artist: dict, source: str, artist_id: str | None) -> str:
     )
 
 
-def main(source: str = "melon", limit: int | None = None, max_pages: int = 1):
+def main(source: str = "melon", mode: str = "full", limit: int | None = None, max_pages: int = 1):
     started_at = time.time()
-    logger.info("=== 파이프라인 시작 [%s] ===", source)
+    logger.info("=== 파이프라인 시작 [%s / %s] ===", source, mode)
+
+    # 인스타 검색 전용 모드: 크롤 없이 '검색 대기' 가수만 처리
+    if mode == "search":
+        _run_insta_search(limit, started_at)
+        return
 
     # genie_genre(장르 탭)는 수집 소스만 다를 뿐, 저장·분류·상세조회는 genie와 동일하게 취급
     crawl_source = source
@@ -115,8 +123,13 @@ def main(source: str = "melon", limit: int | None = None, max_pages: int = 1):
 
             stats["new"] += 1
 
-            handle, insta_source, score, email, not_found_reason = find_instagram(artist)
-            needs_review = handle is None
+            if mode == "collect":
+                # 정보 수집만 — 인스타 검색은 나중에 '인스타 검색(search)' 모드에서 처리
+                handle, insta_source, score, email, not_found_reason = None, "none", None, None, None
+                needs_review = False
+            else:
+                handle, insta_source, score, email, not_found_reason = find_instagram(artist)
+                needs_review = handle is None
 
             upsert_artist({
                 "melon_artist_id": artist.get("melon_artist_id"),
@@ -206,10 +219,58 @@ def main(source: str = "melon", limit: int | None = None, max_pages: int = 1):
     )
 
 
+def _run_insta_search(limit: int | None, started_at: float | None = None) -> None:
+    """'검색 대기'(수집만 되고 인스타 미검색) 가수를 limit명만큼 인스타 탐색."""
+    started_at = started_at or time.time()
+    pending = get_unsearched_artists(limit or 50)
+    total = len(pending)
+    logger.info("인스타 검색 대상(검색 대기): %d명", total)
+    events.stage_start("searching", total=total)
+    stats = {"new": total, "insta_found": 0, "needs_review": 0, "songs_added": 0}
+
+    for idx, artist in enumerate(pending, start=1):
+        name = artist["name"]
+        events.artist_processing(name, idx, total)
+        try:
+            handle, insta_source, score, email, not_found_reason = find_instagram(artist)
+            needs_review = handle is None
+            update_instagram_result(
+                artist["melon_artist_id"], handle, insta_source, score, email,
+                not_found_reason, needs_review,
+            )
+            if handle:
+                stats["insta_found"] += 1
+            if needs_review:
+                stats["needs_review"] += 1
+            events.artist_done(
+                name=name, handle=handle, score=score,
+                source=insta_source if handle else None,
+                index=idx, total=total, needs_review=needs_review, reason=not_found_reason,
+            )
+            logger.info("[%s] 인스타 검색 완료 — %s (%s점)", name, handle or "없음", score or "—")
+        except Exception as e:
+            logger.error("[%s] 인스타 검색 오류: %s", name, e, exc_info=True)
+            events.artist_skip(name, f"오류: {str(e)[:60]}", idx, total)
+            continue
+
+    events.stage_complete("searching")
+    insta_rate = round(stats["insta_found"] / total * 100) if total else 0
+    logger.info(
+        "=== 인스타 검색 완료 === 처리: %d명 | 확보: %d명(%d%%) | 검토 필요: %d명",
+        total, stats["insta_found"], insta_rate, stats["needs_review"],
+    )
+    events.pipeline_done(
+        stats={**stats, "insta_rate": insta_rate, "existing_songs": 0},
+        duration_sec=time.time() - started_at,
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", choices=["melon", "genie", "genie_genre"], default="melon", help="크롤링 소스")
+    parser.add_argument("--mode", choices=["full", "collect", "search"], default="full",
+                        help="full=수집+검색, collect=수집만, search=검색대기 가수 인스타 검색만")
     parser.add_argument("--limit", type=int, default=None, help="처리할 최대 아티스트 수")
     parser.add_argument("--pages", type=int, default=1, help="크롤링할 최대 페이지 수 (지니 전용)")
     args = parser.parse_args()
-    main(source=args.source, limit=args.limit, max_pages=args.pages)
+    main(source=args.source, mode=args.mode, limit=args.limit, max_pages=args.pages)
