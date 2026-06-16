@@ -23,7 +23,7 @@ interface PipelineContextValue {
   setSource: (s: "melon" | "genie" | "genie_genre") => void;
   setPages: (n: number) => void;
   setShowPanel: (v: boolean) => void;
-  runPipeline: (opts?: { limit?: number }) => void;
+  runPipeline: (opts?: { mode?: "collect" | "search" | "full"; limit?: number }) => void;
   closePanel: () => void;
 }
 
@@ -37,7 +37,7 @@ const PipelineContext = createContext<PipelineContextValue>({
   setSource: () => {},
   setPages: () => {},
   setShowPanel: () => {},
-  runPipeline: () => {},
+  runPipeline: (_opts?: { mode?: "collect" | "search" | "full"; limit?: number }) => {},
   closePanel: () => {},
 });
 
@@ -172,7 +172,7 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
 
   // ─── 파이프라인 실행 ────────────────────────────────────────
   const runPipeline = useCallback(
-    async (opts?: { limit?: number }) => {
+    async (opts?: { mode?: "collect" | "search" | "full"; limit?: number }) => {
       if (running || connectingRef.current) return;
       connectingRef.current = true;
       setRunning(true);
@@ -184,7 +184,8 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
       const apiSecret = process.env.NEXT_PUBLIC_PIPELINE_SECRET ?? "";
 
       try {
-        const body: Record<string, unknown> = { source, pages };
+        const mode = opts?.mode ?? "full";
+        const body: Record<string, unknown> = { source, pages, mode };
         if (opts?.limit != null) body.limit = opts.limit;
 
         const res = railwayUrl

@@ -6,7 +6,8 @@ export const maxDuration = 300; // Vercel Pro: 5분
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({ source: "melon", pages: 1 }));
-  const source = body.source === "genie" ? "genie" : "melon";
+  const source = ["genie", "genie_genre"].includes(body.source) ? body.source : "melon";
+  const mode = ["collect", "search", "full"].includes(body.mode) ? body.mode : "full";
   const pages = Math.min(Math.max(Number(body.pages) || 1, 1), 5);
   const limit = Number(body.limit) > 0 ? Math.floor(Number(body.limit)) : undefined;
 
@@ -21,7 +22,7 @@ export async function POST(req: NextRequest) {
         "Content-Type": "application/json",
         ...(apiSecret ? { "x-api-key": apiSecret } : {}),
       },
-      body: JSON.stringify({ source, pages, ...(limit ? { limit } : {}) }),
+      body: JSON.stringify({ source, pages, mode, ...(limit ? { limit } : {}) }),
     });
 
     if (!upstream.ok || !upstream.body) {

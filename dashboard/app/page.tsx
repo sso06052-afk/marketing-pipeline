@@ -14,10 +14,11 @@ type ReviewArtist = Artist & { songs?: Song[] };
 
 const PAGE_SIZE = 30;
 
-type Tab = "pending" | "contacted" | "replied" | "review";
+type Tab = "pending" | "awaiting" | "contacted" | "replied" | "review";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "pending", label: "발송대기" },
+  { id: "awaiting", label: "검색대기" },
   { id: "review", label: "검토필요" },
   { id: "contacted", label: "발송완료" },
   { id: "replied", label: "답장완료" },
@@ -122,7 +123,8 @@ export default function HomePage() {
   // 아티스트 목록
   const [artists, setArtists] = useState<ArtistWithSong[]>([]);
   const [tab, setTab] = useState<Tab>("pending");
-  const [tabCounts, setTabCounts] = useState({ pending: 0, contacted: 0, replied: 0, review: 0 });
+  const [tabCounts, setTabCounts] = useState({ pending: 0, awaiting: 0, contacted: 0, replied: 0, review: 0 });
+  const [searchLimit, setSearchLimit] = useState(30);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -226,11 +228,12 @@ export default function HomePage() {
   async function fetchTabCounts() {
     const { data } = await supabase
       .from("artists")
-      .select("contacted, reply_received, needs_review")
+      .select("contacted, reply_received, needs_review, instagram_handle")
       .eq("last_crawled", selectedDate);
     if (!data) return;
     setTabCounts({
-      pending: data.filter((a) => !a.contacted && !a.needs_review).length,
+      pending: data.filter((a) => !a.contacted && !a.needs_review && a.instagram_handle != null).length,
+      awaiting: data.filter((a) => !a.contacted && !a.needs_review && !a.instagram_handle).length,
       contacted: data.filter((a) => a.contacted && !a.reply_received).length,
       replied: data.filter((a) => a.reply_received).length,
       review: data.filter((a) => a.needs_review).length,
@@ -249,7 +252,8 @@ export default function HomePage() {
       .order("created_at", { ascending: false })
       .range(from, to);
 
-    if (tab === "pending") query = query.eq("contacted", false).eq("needs_review", false);
+    if (tab === "pending") query = query.eq("contacted", false).eq("needs_review", false).not("instagram_handle", "is", null);
+    else if (tab === "awaiting") query = query.eq("contacted", false).eq("needs_review", false).is("instagram_handle", null);
     else if (tab === "contacted") query = query.eq("contacted", true).eq("reply_received", false);
     else if (tab === "replied") query = query.eq("reply_received", true);
     else if (tab === "review") query = query.eq("needs_review", true);
@@ -352,9 +356,9 @@ export default function HomePage() {
                 ))}
               </div>
             )}
-            {/* 파이프라인 실행 버튼 */}
+            {/* 정보 수집 버튼 */}
             <button
-              onClick={() => runPipeline()}
+              onClick={() => runPipeline({ mode: "collect" })}
               disabled={running}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
                 running
@@ -368,9 +372,30 @@ export default function HomePage() {
                   실행 중...
                 </>
               ) : (
-                `▶ ${source === "melon" ? "멜론" : source === "genie" ? `지니 신곡 ${pages}p` : `지니 장르 ${pages}p`} 실행`
+                `▶ 정보 수집`
               )}
             </button>
+            {/* 인스타 검색 영역 */}
+            <div className={`flex items-center gap-1.5 ${running ? "opacity-50 pointer-events-none" : ""}`}>
+              <input
+                type="number"
+                min={1}
+                max={500}
+                value={searchLimit}
+                onChange={(e) => {
+                  const v = Math.max(1, Math.min(500, Number(e.target.value) || 1));
+                  setSearchLimit(v);
+                }}
+                className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-2 focus:ring-violet-300"
+              />
+              <button
+                onClick={() => runPipeline({ mode: "search", limit: Math.max(1, Math.min(500, searchLimit)) })}
+                disabled={running}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold bg-violet-600 text-white hover:bg-violet-700 transition-colors disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed"
+              >
+                인스타 검색
+              </button>
+            </div>
           </div>
         </div>
 
@@ -552,14 +577,88 @@ export default function HomePage() {
                         : "bg-gray-100 text-gray-500"
                     }`}
                   >
-                    {tabCounts[t.id]}
+                    {tabCounts[t.id as keyof typeof tabCounts]}
                   </span>
                 </button>
               ))}
             </div>
 
-            {/* 검토필요 탭: 카드 UI */}
-            {tab === "review" ? (
+            {/* 검색대기 탭: 간단한 카드 목록 */}
+            {tab === "awaiting" ? (
+              loading ? (
+                <div className="flex flex-col gap-3">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 animate-pulse">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <div className="h-4 w-24 bg-gray-100 rounded mb-2" />
+                          <div className="h-3 w-36 bg-gray-100 rounded" />
+                        </div>
+                        <div className="h-3 w-12 bg-gray-100 rounded" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <div className="mb-3 px-1 text-sm text-gray-500">
+                    정보만 수집된 가수예요. 위 &apos;인스타 검색&apos;을 돌리면 인스타를 찾습니다.
+                  </div>
+                  {artists.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-20 text-center bg-white rounded-xl border border-gray-100 shadow-sm">
+                      <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center mb-3">
+                        <svg className="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      <p className="text-sm font-medium text-gray-600">검색 대기 없음</p>
+                      <p className="text-xs text-gray-400 mt-1">이 날 인스타 검색이 필요한 가수가 없습니다</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex flex-col gap-2">
+                        {(artists as ReviewArtist[]).map((a) => (
+                          <div
+                            key={a.melon_artist_id}
+                            className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex items-center justify-between"
+                          >
+                            <div>
+                              <span className="font-semibold text-gray-900">{a.name}</span>
+                              {a.songs?.[0] && (
+                                <div className="text-sm text-gray-500 mt-0.5">
+                                  {a.songs[0].title}
+                                  {a.songs[0].album ? ` · ${a.songs[0].album}` : ""}
+                                </div>
+                              )}
+                            </div>
+                            {(() => {
+                              const link = getSourceLink(a);
+                              return (
+                                <a
+                                  href={link.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-blue-500 hover:underline shrink-0 ml-4"
+                                >
+                                  {link.label}
+                                </a>
+                              );
+                            })()}
+                          </div>
+                        ))}
+                      </div>
+                      {totalPages > 1 && (
+                        <div className="flex items-center justify-between mt-3">
+                          <span className="text-xs text-gray-400">총 {total}명</span>
+                          <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              )
+            ) : /* 검토필요 탭: 카드 UI */
+            tab === "review" ? (
               loading ? (
                 <div className="flex flex-col gap-3">
                   {Array.from({ length: 4 }).map((_, i) => (
