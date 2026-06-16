@@ -249,7 +249,7 @@ export default function HomePage() {
       .from("artists")
       .select("*, songs(melon_song_id, title, album, release_date)", { count: "exact" })
       .eq("last_crawled", selectedDate)
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: true })  // 수집(크롤) 순서 = 지니 발매최신순 그대로
       .range(from, to);
 
     if (tab === "pending") query = query.eq("contacted", false).eq("needs_review", false).not("instagram_handle", "is", null);
