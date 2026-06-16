@@ -40,6 +40,7 @@ class RunRequest(BaseModel):
     pages: int = 1
     limit: int | None = None  # 처리할 최대 아티스트 수 (테스트용 / 검색 개수)
     mode: str = "full"        # full=수집+검색, collect=수집만, search=검색대기 인스타검색만
+    date: str | None = None   # search 모드: 이 수집일(YYYY-MM-DD)의 검색대기만 대상
 
 
 def _check_auth(request: Request) -> None:
@@ -50,12 +51,15 @@ def _check_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-def _run_job(job_id: str, source: str, pages: int, limit: int | None = None, mode: str = "full") -> None:
+def _run_job(job_id: str, source: str, pages: int, limit: int | None = None,
+             mode: str = "full", search_date: str | None = None) -> None:
     """백그라운드 스레드에서 파이프라인 실행 — 브라우저 연결과 무관."""
     pipeline_dir = Path(__file__).parent
     args = [sys.executable, "pipeline.py", "--source", source, "--mode", mode, "--pages", str(pages)]
     if limit:
         args += ["--limit", str(limit)]
+    if search_date:
+        args += ["--date", search_date]
     proc = subprocess.Popen(
         args,
         cwd=str(pipeline_dir),
@@ -135,6 +139,7 @@ async def run_pipeline(body: RunRequest, request: Request):
     mode = body.mode if body.mode in ("full", "collect", "search") else "full"
     pages = max(1, min(5, body.pages))
     limit = body.limit if body.limit and body.limit > 0 else None
+    search_date = body.date or None
 
     job_id = str(uuid.uuid4())
     with _jobs_lock:
@@ -142,7 +147,7 @@ async def run_pipeline(body: RunRequest, request: Request):
         global _latest_job_id
         _latest_job_id = job_id
 
-    thread = threading.Thread(target=_run_job, args=(job_id, source, pages, limit, mode), daemon=True)
+    thread = threading.Thread(target=_run_job, args=(job_id, source, pages, limit, mode, search_date), daemon=True)
     thread.start()
 
     return _stream_job(job_id)

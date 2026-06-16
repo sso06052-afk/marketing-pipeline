@@ -389,7 +389,7 @@ export default function HomePage() {
                 className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-center focus:outline-none focus:ring-2 focus:ring-violet-300"
               />
               <button
-                onClick={() => runPipeline({ mode: "search", limit: Math.max(1, Math.min(500, searchLimit)) })}
+                onClick={() => runPipeline({ mode: "search", limit: Math.max(1, Math.min(500, searchLimit)), date: selectedDate })}
                 disabled={running}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold bg-violet-600 text-white hover:bg-violet-700 transition-colors disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed"
               >

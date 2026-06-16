@@ -10,6 +10,7 @@ export async function POST(req: NextRequest) {
   const mode = ["collect", "search", "full"].includes(body.mode) ? body.mode : "full";
   const pages = Math.min(Math.max(Number(body.pages) || 1, 1), 5);
   const limit = Number(body.limit) > 0 ? Math.floor(Number(body.limit)) : undefined;
+  const date = typeof body.date === "string" ? body.date : undefined;
 
   const railwayUrl = process.env.PIPELINE_API_URL;
   const apiSecret = process.env.PIPELINE_SECRET ?? "";
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest) {
         "Content-Type": "application/json",
         ...(apiSecret ? { "x-api-key": apiSecret } : {}),
       },
-      body: JSON.stringify({ source, pages, mode, ...(limit ? { limit } : {}) }),
+      body: JSON.stringify({ source, pages, mode, ...(limit ? { limit } : {}), ...(date ? { date } : {}) }),
     });
 
     if (!upstream.ok || !upstream.body) {

@@ -39,20 +39,22 @@ def get_existing_artist_ids(source: str = "melon") -> set[str]:
     return {row[id_col] for row in resp.data if row.get(id_col)}
 
 
-def get_unsearched_artists(limit: int = 50) -> list[dict]:
+def get_unsearched_artists(limit: int = 50, crawled_date: str | None = None) -> list[dict]:
     """아직 인스타 검색을 안 한 '검색 대기' 가수 반환.
     검색 대기 = instagram_handle 없음 AND needs_review=false AND contacted=false.
+    crawled_date 지정 시 해당 수집일(last_crawled)만 대상.
     finder.find_instagram 에 넘길 수 있도록 곡 제목/앨범까지 포함."""
     client = get_client()
-    resp = (
+    q = (
         client.table("artists")
         .select("melon_artist_id, genie_artist_id, source, name, agency, genre, songs(title, album)")
         .is_("instagram_handle", "null")
         .eq("needs_review", False)
         .eq("contacted", False)
-        .limit(limit)
-        .execute()
     )
+    if crawled_date:
+        q = q.eq("last_crawled", crawled_date)
+    resp = q.limit(limit).execute()
     out: list[dict] = []
     for row in resp.data:
         songs = row.get("songs") or []

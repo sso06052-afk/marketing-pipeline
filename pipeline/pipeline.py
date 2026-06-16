@@ -50,13 +50,14 @@ def _song_artist_id(artist: dict, source: str, artist_id: str | None) -> str:
     )
 
 
-def main(source: str = "melon", mode: str = "full", limit: int | None = None, max_pages: int = 1):
+def main(source: str = "melon", mode: str = "full", limit: int | None = None,
+         max_pages: int = 1, search_date: str | None = None):
     started_at = time.time()
     logger.info("=== 파이프라인 시작 [%s / %s] ===", source, mode)
 
     # 인스타 검색 전용 모드: 크롤 없이 '검색 대기' 가수만 처리
     if mode == "search":
-        _run_insta_search(limit, started_at)
+        _run_insta_search(limit, started_at, search_date)
         return
 
     # genie_genre(장르 탭)는 수집 소스만 다를 뿐, 저장·분류·상세조회는 genie와 동일하게 취급
@@ -219,12 +220,14 @@ def main(source: str = "melon", mode: str = "full", limit: int | None = None, ma
     )
 
 
-def _run_insta_search(limit: int | None, started_at: float | None = None) -> None:
-    """'검색 대기'(수집만 되고 인스타 미검색) 가수를 limit명만큼 인스타 탐색."""
+def _run_insta_search(limit: int | None, started_at: float | None = None,
+                      search_date: str | None = None) -> None:
+    """'검색 대기'(수집만 되고 인스타 미검색) 가수를 limit명만큼 인스타 탐색.
+    search_date 지정 시 해당 수집일만 대상."""
     started_at = started_at or time.time()
-    pending = get_unsearched_artists(limit or 50)
+    pending = get_unsearched_artists(limit or 50, crawled_date=search_date)
     total = len(pending)
-    logger.info("인스타 검색 대상(검색 대기): %d명", total)
+    logger.info("인스타 검색 대상(검색 대기, 날짜=%s): %d명", search_date or "전체", total)
     events.stage_start("searching", total=total)
     stats = {"new": total, "insta_found": 0, "needs_review": 0, "songs_added": 0}
 
@@ -272,5 +275,6 @@ if __name__ == "__main__":
                         help="full=수집+검색, collect=수집만, search=검색대기 가수 인스타 검색만")
     parser.add_argument("--limit", type=int, default=None, help="처리할 최대 아티스트 수")
     parser.add_argument("--pages", type=int, default=1, help="크롤링할 최대 페이지 수 (지니 전용)")
+    parser.add_argument("--date", default=None, help="search 모드: 이 수집일(YYYY-MM-DD)의 검색대기만 검색")
     args = parser.parse_args()
-    main(source=args.source, mode=args.mode, limit=args.limit, max_pages=args.pages)
+    main(source=args.source, mode=args.mode, limit=args.limit, max_pages=args.pages, search_date=args.date)

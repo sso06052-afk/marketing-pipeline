@@ -23,7 +23,7 @@ interface PipelineContextValue {
   setSource: (s: "melon" | "genie" | "genie_genre") => void;
   setPages: (n: number) => void;
   setShowPanel: (v: boolean) => void;
-  runPipeline: (opts?: { mode?: "collect" | "search" | "full"; limit?: number }) => void;
+  runPipeline: (opts?: { mode?: "collect" | "search" | "full"; limit?: number; date?: string }) => void;
   closePanel: () => void;
 }
 
@@ -37,7 +37,7 @@ const PipelineContext = createContext<PipelineContextValue>({
   setSource: () => {},
   setPages: () => {},
   setShowPanel: () => {},
-  runPipeline: (_opts?: { mode?: "collect" | "search" | "full"; limit?: number }) => {},
+  runPipeline: (_opts?: { mode?: "collect" | "search" | "full"; limit?: number; date?: string }) => {},
   closePanel: () => {},
 });
 
@@ -172,7 +172,7 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
 
   // ─── 파이프라인 실행 ────────────────────────────────────────
   const runPipeline = useCallback(
-    async (opts?: { mode?: "collect" | "search" | "full"; limit?: number }) => {
+    async (opts?: { mode?: "collect" | "search" | "full"; limit?: number; date?: string }) => {
       if (running || connectingRef.current) return;
       connectingRef.current = true;
       setRunning(true);
@@ -187,6 +187,7 @@ export function PipelineProvider({ children }: { children: React.ReactNode }) {
         const mode = opts?.mode ?? "full";
         const body: Record<string, unknown> = { source, pages, mode };
         if (opts?.limit != null) body.limit = opts.limit;
+        if (opts?.date) body.date = opts.date;
 
         const res = railwayUrl
           ? await fetch(`${railwayUrl}/run`, {
